@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hold'em Plus — demo table</title>
+<style>
+  :root {
+    --bg: #14171C;
+    --felt: #1B3A2F;
+    --felt-edge: #14261F;
+    --accent: #C9A227;
+    --text: #ECE7DD;
+    --muted: #8B9099;
+    --danger: #B4482F;
+    --win: #4C8C6B;
+    --panel: #1C2027;
+    --panel-border: #2A2F38;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    line-height: 1.45;
+  }
+  header {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 1rem;
+  }
+  h1 {
+    font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+    font-weight: 500;
+    font-size: 2rem;
+    margin: 0 0 0.3rem;
+    letter-spacing: 0.01em;
+  }
+  header p {
+    color: var(--muted);
+    margin: 0;
+    max-width: 60ch;
+  }
+  main {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 0 1.5rem 3rem;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1.5rem;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 1.25rem 1.5rem;
+  }
+  .panel h2 {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--muted);
+    margin: 0 0 0.9rem;
+  }
+  label {
+    display: block;
+    font-size: 0.85rem;
+    color: var(--muted);
+    margin-bottom: 0.3rem;
+  }
+  input[type=text], input[type=number] {
+    width: 100%;
+    background: #10131A;
+    border: 1px solid var(--panel-border);
+    color: var(--text);
+    padding: 0.55rem 0.7rem;
+    border-radius: 6px;
+    font-size: 0.95rem;
+  }
+  .row { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: flex-end; }
+  .row > div { flex: 1; min-width: 160px; }
+  button {
+    background: var(--accent);
+    color: #1C1500;
+    border: none;
+    padding: 0.6rem 1.1rem;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:hover { filter: brightness(1.08); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.secondary {
+    background: transparent;
+    border: 1px solid var(--panel-border);
+    color: var(--text);
+  }
+  button.danger { background: var(--danger); color: var(--text); }
+
+  .table-wrap {
+    display: flex;
+    justify-content: center;
+    padding: 2rem 0;
+  }
+  .felt {
+    position: relative;
+    width: 100%;
+    max-width: 720px;
+    aspect-ratio: 16 / 9;
+    background: radial-gradient(ellipse at center, var(--felt) 0%, var(--felt-edge) 100%);
+    border-radius: 50% / 40%;
+    border: 10px solid #0F1A15;
+    box-shadow: inset 0 0 60px rgba(0,0,0,0.5), 0 10px 30px rgba(0,0,0,0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .board {
+    text-align: center;
+  }
+  .community-cards { display: flex; gap: 0.4rem; justify-content: center; margin-bottom: 0.6rem; min-height: 3.6rem; }
+  .pot-line { color: var(--accent); font-size: 0.9rem; font-weight: 600; }
+  .card {
+    width: 2.4rem;
+    height: 3.4rem;
+    background: #F4F1EA;
+    border-radius: 5px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 1.05rem;
+    color: #1C1C1C;
+  }
+  .card.red { color: #A8342A; }
+  .card.back {
+    background: repeating-linear-gradient(45deg, #26324A, #26324A 4px, #1B2436 4px, #1B2436 8px);
+  }
+
+  .seats {
+    position: absolute;
+    inset: 0;
+  }
+  .seat {
+    position: absolute;
+    background: rgba(20,23,28,0.85);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 0.5rem 0.7rem;
+    min-width: 120px;
+    font-size: 0.8rem;
+  }
+  .seat.you { border-color: var(--accent); }
+  .seat.active { box-shadow: 0 0 0 2px var(--accent); }
+  .seat.folded { opacity: 0.4; }
+  .seat .name { font-weight: 600; margin-bottom: 0.15rem; }
+  .seat .stack { color: var(--muted); }
+  .seat .cards { display: flex; gap: 0.2rem; margin-top: 0.3rem; }
+  .seat .cards .card { width: 1.5rem; height: 2.1rem; font-size: 0.7rem; }
+  .badge {
+    display: inline-block;
+    font-size: 0.68rem;
+    padding: 0.05rem 0.4rem;
+    border-radius: 4px;
+    margin-left: 0.3rem;
+  }
+  .badge.allin { background: var(--danger); }
+  .badge.win { background: var(--win); }
+
+  .actions { display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center; }
+  .actions input[type=number] { width: 100px; }
+
+  #log {
+    font-size: 0.85rem;
+    color: var(--muted);
+    max-height: 160px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column-reverse;
+  }
+  #log div { padding: 0.15rem 0; border-bottom: 1px solid var(--panel-border); }
+
+  .hint { font-size: 0.8rem; color: var(--muted); margin-top: 0.5rem; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Hold'em Plus</h1>
+  <p>A play-money demo of Hold'em Plus: standard Texas Hold'em with a third hole card dealt after
+     the flop. No real money, no accounts required — pick a name and sit down.</p>
+</header>
+
+<main>
+  <section class="panel" id="setup-panel">
+    <h2>Get seated</h2>
+    <div class="row">
+      <div>
+        <label for="display-name">Your name</label>
+        <input type="text" id="display-name" placeholder="Guest">
+      </div>
+      <div>
+        <button id="btn-new-table">New table</button>
+      </div>
+    </div>
+    <div class="row" style="margin-top:0.9rem;">
+      <div>
+        <label for="join-table-id">Or join an existing table id</label>
+        <input type="text" id="join-table-id" placeholder="table id">
+      </div>
+      <div>
+        <button class="secondary" id="btn-join-table">Join</button>
+      </div>
+    </div>
+    <p class="hint" id="setup-hint"></p>
+  </section>
+
+  <section class="panel" id="lobby-panel" style="display:none;">
+    <h2>Table <span id="lobby-table-id"></span></h2>
+    <p>Share this table's id with another browser tab or player so they can join before you start.</p>
+    <p>Seated: <span id="lobby-seated">0</span> / <span id="lobby-max"></span></p>
+    <button id="btn-start-table">Start table</button>
+  </section>
+
+  <section id="game-section" style="display:none;">
+    <div class="table-wrap">
+      <div class="felt">
+        <div class="seats" id="seats"></div>
+        <div class="board">
+          <div class="community-cards" id="community-cards"></div>
+          <div class="pot-line" id="pot-line"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Your move</h2>
+      <div class="actions" id="actions"></div>
+      <p class="hint" id="turn-hint"></p>
+    </div>
+
+    <div class="panel" style="margin-top:1rem;">
+      <h2>Table activity</h2>
+      <div id="log"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const params = new URLSearchParams(window.location.search);
+const API_BASE = params.get("api") || (window.location.origin.startsWith("file")
+    ? "http://localhost:8000" : window.location.origin);
+
+let playerId = null;
+let tableId = params.get("table") || null;
+let maxSeats = null;
+let socket = null;
+let pollTimer = null;
+
+function log(msg) {
+  const el = document.getElementById("log");
+  const line = document.createElement("div");
+  line.textContent = msg;
+  el.prepend(line);
+}
+
+async function api(path, opts = {}) {
+  const resp = await fetch(API_BASE + path, {
+    headers: { "Content-Type": "application/json" },
+    ...opts,
+  });
+  const body = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(body.detail || `Request failed: ${path}`);
+  return body;
+}
+
+document.getElementById("btn-new-table").onclick = async () => {
+  try {
+    const name = document.getElementById("display-name").value || undefined;
+    const guest = await api("/guest", { method: "POST", body: JSON.stringify({ display_name: name }) });
+    playerId = guest.player_id;
+    const table = await api("/tables", { method: "POST", body: JSON.stringify({ max_seats: 6, starting_stack: 40 }) });
+    tableId = table.table_id;
+    maxSeats = table.max_seats;
+    await api(`/tables/${tableId}/join`, { method: "POST", body: JSON.stringify({ player_id: playerId }) });
+    enterLobby();
+  } catch (e) {
+    document.getElementById("setup-hint").textContent = e.message;
+  }
+};
+
+document.getElementById("btn-join-table").onclick = async () => {
+  try {
+    const name = document.getElementById("display-name").value || undefined;
+    const enteredId = document.getElementById("join-table-id").value.trim();
+    if (!enteredId) throw new Error("Enter a table id to join");
+    const guest = await api("/guest", { method: "POST", body: JSON.stringify({ display_name: name }) });
+    playerId = guest.player_id;
+    tableId = enteredId;
+    await api(`/tables/${tableId}/join`, { method: "POST", body: JSON.stringify({ player_id: playerId }) });
+    const state = await api(`/tables/${tableId}/state`);
+    maxSeats = state.max_seats;
+    enterLobby();
+  } catch (e) {
+    document.getElementById("setup-hint").textContent = e.message;
+  }
+};
+
+document.getElementById("btn-start-table").onclick = async () => {
+  try {
+    await api(`/tables/${tableId}/start`, { method: "POST" });
+    enterGame();
+  } catch (e) {
+    log("Could not start: " + e.message);
+  }
+};
+
+function enterLobby() {
+  document.getElementById("setup-panel").style.display = "none";
+  document.getElementById("lobby-panel").style.display = "block";
+  document.getElementById("lobby-table-id").textContent = tableId;
+  document.getElementById("lobby-max").textContent = maxSeats;
+  refreshLobby();
+}
+
+async function refreshLobby() {
+  const state = await api(`/tables/${tableId}/state`);
+  document.getElementById("lobby-seated").textContent = state.seated_players.length;
+  if (state.status === "in_progress") {
+    enterGame();
+    return;
+  }
+  setTimeout(refreshLobby, 1500);
+}
+
+function enterGame() {
+  document.getElementById("lobby-panel").style.display = "none";
+  document.getElementById("game-section").style.display = "block";
+  connectSocket();
+}
+
+function connectSocket() {
+  const wsBase = API_BASE.replace(/^http/, "ws");
+  socket = new WebSocket(`${wsBase}/ws/tables/${tableId}?player_id=${playerId}`);
+  socket.onmessage = (evt) => {
+    const msg = JSON.parse(evt.data);
+    if (msg.type === "state") render(msg);
+    else if (msg.type === "error") log("Error: " + msg.message);
+  };
+  socket.onclose = () => {
+    // fall back to polling if the socket drops
+    if (!pollTimer) pollTimer = setInterval(pollState, 2000);
+  };
+}
+
+async function pollState() {
+  try {
+    const state = await api(`/tables/${tableId}/state?player_id=${playerId}`);
+    render(state);
+  } catch (e) { /* table may not exist yet, ignore */ }
+}
+
+function sendAction(actionType, amount) {
+  const payload = { type: "action", action_type: actionType, amount: amount || 0 };
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify(payload));
+  } else {
+    api(`/tables/${tableId}/actions`, {
+      method: "POST",
+      body: JSON.stringify({ player_id: playerId, action_type: actionType, amount: amount || 0 }),
+    }).then(render).catch((e) => log("Error: " + e.message));
+  }
+}
+
+function rankLabel(cardStr) {
+  // Card strings from the backend look like "Ah", "Td", "9c"
+  return cardStr.slice(0, -1);
+}
+function suitInfo(cardStr) {
+  const suit = cardStr.slice(-1);
+  const map = { c: ["♣", false], d: ["♦", true], h: ["♥", true], s: ["♠", false] };
+  return map[suit] || ["?", false];
+}
+
+function renderCard(cardStr) {
+  const [symbol, isRed] = suitInfo(cardStr);
+  const div = document.createElement("div");
+  div.className = "card" + (isRed ? " red" : "");
+  div.textContent = `${rankLabel(cardStr)}${symbol}`;
+  return div;
+}
+function renderCardBack() {
+  const div = document.createElement("div");
+  div.className = "card back";
+  return div;
+}
+
+let lastHandComplete = null;
+
+function render(state) {
+  const communityEl = document.getElementById("community-cards");
+  communityEl.innerHTML = "";
+  const hand = state.hand;
+
+  if (!hand) {
+    document.getElementById("pot-line").textContent =
+      state.status === "complete" ? "Tournament complete." : "Waiting for the next hand...";
+    document.getElementById("seats").innerHTML = "";
+    document.getElementById("actions").innerHTML = "";
+    return;
+  }
+
+  (hand.community_cards || []).forEach((c) => communityEl.appendChild(renderCard(c)));
+
+  const pot = Object.values(hand.payouts || {}).reduce((a, b) => a + b, 0);
+  if (hand.is_complete) {
+    const winners = Object.entries(hand.payouts || {})
+      .map(([pid, amt]) => `${shortId(pid)} +${amt}`).join(", ");
+    document.getElementById("pot-line").textContent = winners ? `Hand complete — ${winners}` : "Hand complete.";
+    if (lastHandComplete !== JSON.stringify(hand.payouts)) {
+      log(`Hand complete: ${winners || "no payout"}`);
+      lastHandComplete = JSON.stringify(hand.payouts);
+    }
+  } else {
+    document.getElementById("pot-line").textContent = `Blinds ${hand.small_blind}/${hand.big_blind}`;
+  }
+
+  renderSeats(hand);
+  renderActions(hand);
+}
+
+function shortId(pid) { return pid ? pid.slice(0, 6) : pid; }
+
+function renderSeats(hand) {
+  const container = document.getElementById("seats");
+  container.innerHTML = "";
+  const n = hand.players.length;
+  const radiusX = 46, radiusY = 42;
+
+  hand.players.forEach((p, i) => {
+    const angle = (i / n) * 2 * Math.PI - Math.PI / 2;
+    const left = 50 + radiusX * Math.cos(angle);
+    const top = 50 + radiusY * Math.sin(angle);
+
+    const seat = document.createElement("div");
+    seat.className = "seat" +
+      (p.player_id === playerId ? " you" : "") +
+      (p.player_id === hand.current_actor ? " active" : "") +
+      (p.folded ? " folded" : "");
+    seat.style.left = `calc(${left}% - 65px)`;
+    seat.style.top = `calc(${top}% - 30px)`;
+
+    const name = document.createElement("div");
+    name.className = "name";
+    name.textContent = shortId(p.player_id) + (p.player_id === playerId ? " (you)" : "");
+    if (p.all_in) {
+      const b = document.createElement("span");
+      b.className = "badge allin";
+      b.textContent = "all-in";
+      name.appendChild(b);
+    }
+    if (hand.is_complete && hand.payouts && hand.payouts[p.player_id]) {
+      const b = document.createElement("span");
+      b.className = "badge win";
+      b.textContent = "wins";
+      name.appendChild(b);
+    }
+    seat.appendChild(name);
+
+    const stack = document.createElement("div");
+    stack.className = "stack";
+    stack.textContent = `Stack: ${p.stack}`;
+    seat.appendChild(stack);
+
+    const cards = document.createElement("div");
+    cards.className = "cards";
+    if (p.hole_cards) {
+      p.hole_cards.forEach((c) => cards.appendChild(renderCard(c)));
+    } else {
+      for (let i = 0; i < p.hole_card_count; i++) cards.appendChild(renderCardBack());
+    }
+    seat.appendChild(cards);
+
+    container.appendChild(seat);
+  });
+}
+
+function renderActions(hand) {
+  const el = document.getElementById("actions");
+  el.innerHTML = "";
+  const hint = document.getElementById("turn-hint");
+
+  if (hand.is_complete) {
+    hint.textContent = hand.rabbit_hunt_eligible
+      ? "You folded on the turn or river — you can pay a small blind to see the river you'd have faced."
+      : "Waiting for the next hand to be dealt...";
+    if (hand.rabbit_hunt_eligible) {
+      const btn = document.createElement("button");
+      btn.className = "secondary";
+      btn.textContent = "Rabbit hunt";
+      btn.onclick = async () => {
+        try {
+          const result = await api(`/tables/${tableId}/rabbit-hunt`, {
+            method: "POST",
+            body: JSON.stringify({ player_id: playerId }),
+          });
+          log(`Rabbit hunt: the river would have been ${result.river.join(", ")} (cost ${result.cost})`);
+        } catch (e) { log("Error: " + e.message); }
+      };
+      el.appendChild(btn);
+    }
+    return;
+  }
+
+  if (hand.current_actor !== playerId) {
+    hint.textContent = hand.current_actor
+      ? `Waiting on ${shortId(hand.current_actor)}...`
+      : "Waiting...";
+    return;
+  }
+
+  hint.textContent = "Your turn.";
+  const legal = hand.legal_actions || [];
+  const amountInput = document.createElement("input");
+  amountInput.type = "number";
+  amountInput.min = "0";
+  amountInput.placeholder = "amount";
+
+  legal.forEach((actionType) => {
+    const btn = document.createElement("button");
+    btn.textContent = actionType.replace("_", " ").toLowerCase();
+    if (actionType === "FOLD") btn.className = "danger";
+    if (actionType === "CHECK" || actionType === "CALL") btn.className = "";
+    if (actionType === "BET" || actionType === "RAISE") {
+      btn.onclick = () => sendAction(actionType, parseInt(amountInput.value || "0", 10));
+    } else {
+      btn.onclick = () => sendAction(actionType);
+    }
+    el.appendChild(btn);
+  });
+  if (legal.includes("BET") || legal.includes("RAISE")) {
+    el.appendChild(amountInput);
+  }
+}
+</script>
+</body>
+</html>
