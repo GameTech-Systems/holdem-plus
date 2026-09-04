@@ -11,22 +11,119 @@ Start with `README.md` for how to run things. This document is about
 
 ---
 
+## 0. Status as of the most recent session — read this first
+
+The repo is live at `github.com/GameTech-Systems/holdem-plus` (private, MIT
+licensed) and has been verified **outside my own sandbox**, which matters —
+this is the first real confirmation the project works on infrastructure
+other than the one it was built in:
+
+- Cloned into a **GitHub Codespace**, `pip install -r requirements.txt` +
+  `pytest -q` → **154 passed, 2 warnings** (the one warning is Starlette's
+  test client noting its own internal `anyio` deprecation — unrelated to
+  this project's code).
+- Server started with `python3 -m uvicorn api:app --reload` (not plain
+  `uvicorn` — see the bug below) and reached both `/docs` and `/app`
+  through Codespaces' port-forwarding proxy.
+- **A real hand was played end to end across two browser tabs** (two
+  separate guest sessions, same table, both browsers hitting the same
+  forwarded Codespaces URL) and completed successfully.
+
+**Bottom line: the game is operational.** The engine, API, and client all
+work together on a real deployment, not just in tests. What it needs next
+is **audit testing** — playing more hands deliberately looking for
+mismatches between what the engine computed and what the UI shows, rather
+than more unit tests of individual modules (those are already thorough;
+154 of them pass). Two concrete issues surfaced already:
+
+### Bug 1: `/app` redirect leaks `localhost` behind a proxy
+
+FastAPI/Starlette's static-files mount redirects a no-trailing-slash
+request (`/app`) to the slashed version (`/app/`), and builds that
+redirect using the server's view of its own address. Behind Codespaces'
+(or Render's, or Fly.io's) reverse proxy, that's `localhost`, not the
+public URL — so the browser was told to go to `localhost:8000` and
+(correctly) refused to connect, since the browser isn't inside the
+container. **Workaround used this session:** type the trailing slash
+yourself (`/app/` instead of `/app`). **Not yet fixed in code** — the real
+fix is telling `uvicorn`/Starlette to trust forwarded-host headers from
+the proxy so the redirect resolves to the public URL. Worth doing before
+handing this link to anyone external, since "the demo doesn't load unless
+you know to add a slash" is exactly the kind of friction that loses a
+casino contact's attention in the first ten seconds.
+
+### Bug 2 (diagnosed, not yet fixed): no hand-completion / winner summary shown
+
+**This is the one to prioritize next.** The symptom: play a hand to
+showdown, and the client just moves straight into the next hand — no
+"X wins with a flush" moment, no visible summary of what happened.
+
+**Root cause, found by re-reading `api.py`:** in both `apply_action()`
+(REST) and `_handle_ws_message()` (WebSocket), the sequence on hand
+completion is:
+
+```python
+if hand.is_complete:
+    session.tournament.complete_hand(INTERNAL_TABLE_ID)   # (a)
+    _start_next_hand_if_needed(session)                    # (b)
+# ... then, only after both (a) and (b) have already run:
+await _broadcast_state(session)                            # (c)
+```
+
+`complete_hand()` at (a) computes and returns the finished hand's
+`HandResult` (payouts, revealed hands, community cards) — but nothing
+holds onto it. `_start_next_hand_if_needed()` at (b) immediately overwrites
+`session.tournament.hands_by_table["T1"]` with a **brand-new** `Hand`. By
+the time `_broadcast_state()` runs at (c) and calls `_serialize_state()`,
+`_current_hand(session)` already returns the *new* hand — the just-finished
+hand's payouts/showdown/community-cards are gone. They were computed
+correctly by the engine (that part's fully tested) but never actually sent
+to any client. The static demo client's `render()` function in
+`static/index.html` does have code to display a "Hand complete — ..." line
+and log it (`if hand.is_complete { ... }`) — that code is simply never
+reached, because the state it receives never has `is_complete: true` on it.
+
+**Suggested fix direction (not yet implemented):** don't let step (b)
+happen before step (c) has a chance to show the completed hand. Concretely,
+either:
+- add a `last_hand_result` field to `_serialize_state()`'s output (captured
+  before starting the next hand) so the client can show a summary banner
+  even once a new hand is already live, or
+- broadcast a distinct, one-time `{"type": "hand_result", ...}` message
+  right after (a) and before (b), so it's structurally separate from the
+  ongoing `"state"` messages the client already treats as transient log
+  lines — this is probably the cleaner fix, since it matches how
+  `static/index.html`'s `log()` function already expects one-off events
+  rather than a persistent field it has to remember to diff against.
+
+Either way: **write the test for this before fixing it.** `test_api.py`
+currently has no test that asserts a hand-completion response/broadcast
+actually contains the finished hand's payout info — that gap is exactly
+how this shipped unnoticed through 154 passing tests. Add
+`test_hand_completion_broadcast_includes_winner_and_payout` (or similar)
+that plays a hand to completion via the REST `/actions` endpoint and
+asserts the *response to that final action* (not the next poll) contains
+non-empty `payouts` and `is_complete: true` for the hand that just ended.
+
+---
+
 ## 1. What exists right now
 
 A complete, tested, working backend for Hold'em Plus, plus a minimal
 functional web client. Concretely:
 
-- **154 passing tests** across 8 modules (`pytest -q`).
-- **A real FastAPI server** (`api.py`) that runs with `uvicorn api:app` and
-  has been smoke-tested three ways: FastAPI's in-process `TestClient`
-  (the 22 tests in `test_api.py`), a real `uvicorn` process hit with `curl`,
-  and a real `uvicorn` process driven through a full hand via plain HTTP
-  requests (chips conserved, hand auto-advanced correctly).
-- **A minimal static web client** (`static/index.html`) served at `/app` by
-  the same FastAPI process — open it, create a table, open it again in a
-  second tab, join, start, and play a hand with real clicks. This is
-  explicitly a *placeholder*, not the recommended final client — see
-  Section 4.
+- **154 passing tests** across 8 modules (`pytest -q`), confirmed both in
+  this session's sandbox and independently in a GitHub Codespace.
+- **A real FastAPI server** (`api.py`) that runs with
+  `python3 -m uvicorn api:app --reload` and has now been verified four
+  ways: FastAPI's in-process `TestClient` (the 22 tests in `test_api.py`),
+  a real `uvicorn` process hit with `curl`, a real `uvicorn` process driven
+  through a full hand via plain HTTP requests, and a live two-tab browser
+  session through a real Codespaces deployment.
+- **A minimal static web client** (`static/index.html`) served at `/app/`
+  by the same FastAPI process (note the trailing slash — Bug 1 above).
+  This is explicitly a *placeholder*, not the recommended final client —
+  see Section 5.
 
 ### Module map (see `README.md` for the same list with descriptions)
 
@@ -35,21 +132,23 @@ poker_types.py, hand_evaluator.py, betting_state_machine.py,
 side_pots.py, tournament_structure.py, tournament_balancing.py
   -> orchestrator.py (Hand + Tournament)
   -> api.py (REST + WebSocket)
-  -> static/index.html (vanilla JS client, served at /app)
+  -> static/index.html (vanilla JS client, served at /app/)
 ```
 
 Each module was built and tested independently before being wired into the
 next layer up — if something breaks, the fastest diagnosis is usually
 "run that module's own test file in isolation" before assuming the bug is
-in the wiring.
+in the wiring. (Bug 2 above is a good example of the exception: it's purely
+a wiring/sequencing bug in `api.py` — every module it touches is correct
+and fully tested on its own.)
 
 ---
 
-## 2. What changed in this session, and why
+## 2. What changed in the session that built this
 
-The attached revised plan (`Hold_em_Plus___Technology_Development_Plan.md`)
+The revised plan (`Hold_em_Plus___Technology_Development_Plan.md`)
 answered the open rules questions from the original plan. Two of those
-answers had real implementation consequences, both now done:
+answers had real implementation consequences, both done:
 
 - **Rabbit Runner moved from v2 to v1 scope.** Implemented in
   `orchestrator.py`: `Hand.is_eligible_for_rabbit_hunt()` and
@@ -65,11 +164,8 @@ answers had real implementation consequences, both now done:
 
 The revised dealer-procedure wording (burn-then-flop, burn-then-3rd-hole,
 etc.) already matched what `betting_state_machine.py` and `orchestrator.py`
-implemented from the first draft — no code change needed there, just
-confirms the existing sequencing is right.
-
-The "no equity-guidance / trainer mode for v1" answer has no code
-implication (it's a product decision to build nothing there yet).
+implemented from the first draft. The "no equity-guidance / trainer mode
+for v1" answer has no code implication.
 
 ---
 
@@ -80,143 +176,135 @@ implication (it's a product decision to build nothing there yet).
   `betting_state_machine.py`) is correct for every postflop street but
   wrong for preflop, which starts left of the *big blind*. `Hand`
   constructs the preflop round directly instead of routing through
-  `HandFlow.start_betting_round()`. If you ever change betting order
-  logic, this is the one place it's special-cased — read the comment in
-  `Hand._start_preflop_betting()` first.
+  `HandFlow.start_betting_round()`. Read the comment in
+  `Hand._start_preflop_betting()` before touching betting order logic.
 - **Heads-up blind posting is a special case.** Button posts the small
-  blind and acts first preflop, in `Hand._post_blinds()`. This is a real
-  poker rule, not a demo shortcut.
+  blind and acts first preflop, in `Hand._post_blinds()`. Real poker rule,
+  not a demo shortcut.
 - **Chips live in `Tournament`, not `tournament_balancing`.** Seating and
   elimination (`tournament_balancing.py`) deliberately know nothing about
   chip counts — `Tournament` in `orchestrator.py` owns the `stacks` dict
-  and writes it back after every hand, then hands busted player ids to
-  `tournament_balancing.eliminate_player()`, which triggers its own
-  rebalancing. Keep this separation if you extend either module.
+  and writes it back after every hand. Keep this separation if you extend
+  either module.
 - **The API is single-table-per-game.** `Tournament` already supports
-  multi-table balancing and breaking (tested in `test_tournament_balancing.py`),
-  but `api.py` always creates a `Tournament` with `max_table_size` equal to
-  the table's seat count, so it only ever produces one internal table
-  (`"T1"`). Multi-table routing through the API is real, scoped work, not
-  yet started (see Section 4).
+  multi-table balancing and breaking (tested in
+  `test_tournament_balancing.py`), but `api.py` always creates a
+  `Tournament` with `max_table_size` equal to the table's seat count, so it
+  only ever produces one internal table (`"T1"`).
 - **State is in-memory, single-process.** `TABLES` and `GUESTS` in
-  `api.py` are module-level dicts. This is fine for a demo behind one
-  `uvicorn` worker. It is **not** safe to run with `--workers > 1` or
-  behind a load balancer without replacing that storage — each worker
-  would have its own, inconsistent copy of every table.
+  `api.py` are module-level dicts. Fine behind one `uvicorn` worker. **Not**
+  safe with `--workers > 1` or a load balancer without replacing that
+  storage.
+- **New, this session: the hand-completion sequencing bug (Bug 2 above)
+  is the clearest illustration yet of why "the engine is fully tested"
+  and "the product is fully tested" are different claims.** Every module
+  below `api.py` is correct; the bug is entirely in the order two lines
+  run in a request handler. Audit testing from here should specifically
+  look for more of this category — sequencing/ordering issues at the
+  API layer that unit tests of individual modules can't catch.
 
 ---
 
 ## 4. What's explicitly NOT built — read this before promising anything
 
 - **No real frontend.** `static/index.html` is a deliberately minimal,
-  single-file vanilla JS/CSS client — enough to prove the API works and to
-  have *something* clickable for a demo link, not a polished product. The
-  original plan's recommendation to fork the PokerTH web client (or
-  `bocaletto-luca/Texas-Holdem`) still stands as the right move for
-  anything shown to an actual poker room or casino. Treat the current
-  client as a bridge, not the destination.
-- **No analytics/instrumentation layer.** Section 3.2 item 5 of the plan —
-  hands-per-hour, pot-size-vs-blinds, hand-strength distribution at
-  showdown, player-reported excitement — is the part that actually tests
-  the core hypothesis, and none of it exists yet. This is a real gap, not
-  a nice-to-have: without it, the demo can prove the game *works* but not
-  that it's *better*. Natural place to start: log every `HandResult` from
-  `Tournament.hand_history` (already populated) to a file or a metrics
-  endpoint.
-- **No persistence.** Restarting the `uvicorn` process loses every table.
-  Fine for a demo; not fine for anything a casino contact might return to
-  the next day. Cheapest fix for a demo (not production): a periodic
-  dump of `TABLES`/`GUESTS` to disk, reloaded on startup.
+  single-file vanilla JS/CSS client. The original plan's recommendation to
+  fork the PokerTH web client (or `bocaletto-luca/Texas-Holdem`) still
+  stands as the right move for anything shown to an actual poker room or
+  casino. Treat the current client as a bridge, not the destination.
+- **No analytics/instrumentation layer.** Hands-per-hour, pot-size-vs-blinds,
+  hand-strength distribution at showdown, player-reported excitement — none
+  of it exists yet. This is a real gap: without it, the demo can prove the
+  game *works* but not that it's *better*. Start with logging every
+  `HandResult` from `Tournament.hand_history` (already populated).
+- **No persistence.** Restarting `uvicorn` loses every table.
 - **No multi-table routing in the API**, even though `Tournament` supports
-  it. If the demo needs a bigger field than one table's max seats, that's
-  the next piece of `api.py` to build, not new engine work.
-- **No rate limiting, no abuse protection, no real auth.** Fine behind a
-  link you hand to a handful of poker-room contacts; not fine if the link
-  gets shared widely.
+  it.
+- **No rate limiting, no abuse protection, no real auth.**
 - **Known, documented simplifications inside the engine itself** (each has
   a comment at the point in the code where it matters, and a test covering
-  the specific edge case rather than leaving it silent):
+  the edge case rather than leaving it silent):
   - `side_pots.py`: a pot layer where every contributor folded merges into
-    the prior pot rather than being resolved via incremental uncalled-bet
-    return at each street closure. Fine for a fake-money demo; worth a
-    second look before anything with real stakes.
-  - `betting_state_machine.py`: no side-pot math lives here by design
-    (kept in `side_pots.py`); this module also doesn't handle multi-way
-    all-in edge cases beyond what `is_complete()` needs.
-  - `tournament_balancing.py`: player moves between tables happen
-    immediately on elimination, not delayed to the moved player's next big
-    blind (a real-room courtesy, not a correctness issue). No "avoid
-    reseating two players who were just broken apart" softening rule.
+    the prior pot rather than incremental uncalled-bet return per street.
+  - `betting_state_machine.py`: no side-pot math here by design (lives in
+    `side_pots.py`).
+  - `tournament_balancing.py`: player moves happen immediately on
+    elimination, not delayed to the moved player's next big blind. No
+    "avoid reseating players who were just broken apart" rule.
 
-None of these are blockers for a fake-money GitHub demo. All of them are
-real conversations to have before anyone discusses real money.
+None of these are blockers for a fake-money demo. All are real
+conversations before anyone discusses real money.
 
 ---
 
-## 5. Licensing — a decision that needs to happen before the repo goes public
+## 5. Licensing — resolved this session
 
-Everything in this repo right now (all 8 engine/API modules, the static
-client) is **original code with no forked dependencies**, so the team is
-free to license this repository however it wants — MIT or Apache-2.0 are
-both reasonable, permissive defaults for a repo meant to be evaluated and
-possibly integrated by poker rooms and casinos.
-
-That freedom disappears the moment anyone forks PokerTH's web client
-(AGPLv3/GPLv2) or `bocaletto-luca/Texas-Holdem` (GPLv3) into this repo, per
-Section 6 of the tech plan. One thing worth flagging to whoever makes that
-call: because this backend now talks to any frontend purely over a network
-API (REST/WebSocket) rather than being statically combined into one
-artifact, a forked-AGPL frontend calling this backend as a separate service
-is the kind of architecture that's commonly treated as *not* creating a
-combined work requiring the backend to also be AGPL — that's a favorable
-starting position, not a legal conclusion. Get an actual read from counsel
-before relying on it, same as every other legal note in the tech plan.
-
-**Concrete recommendation:** pick MIT or Apache-2.0 for this repo now,
-before adding a `LICENSE` file, and revisit specifically when/if a PokerTH
-fork gets merged in rather than assuming today's choice still holds then.
+**Done:** the repo is MIT licensed (chosen at repo-creation time). Every
+module is original code with no forked dependencies, so this was a free
+choice — see the tech plan's Section 6 for why that freedom disappears the
+moment a PokerTH or `bocaletto-luca` fork gets merged in, and revisit the
+license specifically at that point rather than assuming MIT still fits.
 
 ---
 
-## 6. Fastest path from here to a live GitHub demo link
+## 6. Fastest path from here to a live, shareable demo link
 
-In rough priority order:
+Updated priority order, given this session's findings:
 
-1. **Add a `LICENSE` file** (Section 5) — do this before making the repo
-   public, not after.
-2. **Push this repo to GitHub as-is.** Everything here already runs from a
-   clean checkout (`pip install -r requirements.txt && pytest -q`) — verify
-   that on a truly clean clone/venv before pushing, since this session's
-   testing all happened in one accumulated environment.
-3. **Deploy `api.py` somewhere with a stable URL.** A single-process free
-   tier (Render, Fly.io, Railway) is enough for a demo — remember the
-   single-worker constraint from Section 3. Point `static/index.html` at
-   it via `?api=https://your-deployed-url` in the query string, or just
-   let people hit `https://your-deployed-url/app` directly (it's already
-   same-origin, no config needed).
-4. **Play a full hand yourself against the deployed URL** end to end (two
-   browser tabs, like the smoke test in this session) before sending the
-   link to anyone external.
+1. **Fix Bug 2 (hand-completion summary)** — highest priority. This is the
+   difference between "technically works" and "anyone can tell what just
+   happened." Write the missing test first (Section 0), then fix.
+2. **Fix Bug 1 (`/app` proxy redirect)** — low effort, meaningfully reduces
+   first-impression friction for anyone you send a link to.
+3. **Do a real audit-testing pass**, not more unit tests: play many hands
+   deliberately trying to break the sequencing (multi-way all-ins, rabbit
+   hunts, folds at every street, rapid actions from two tabs at once) and
+   watch for mismatches between engine state and what the UI shows, the
+   way Bug 2 was found. Log anything that looks off even if you can't
+   immediately explain it.
+4. **Deploy somewhere with a stable, non-Codespaces URL.** Codespaces was
+   great for verification but isn't meant to be a durable public link —
+   it's tied to being logged into your GitHub account and isn't designed
+   to run unattended. A single-process free tier (Render, Fly.io, Railway)
+   is the right target for an actual shareable demo link (remember the
+   single-worker constraint from Section 3).
 5. **Decide whether to invest in a real frontend now or after initial
-   feedback.** The minimal client is enough to demo the *rules* (does the
-   3rd hole card feel good, is the pacing right); it is not enough to
-   demo *product polish* to a casino evaluating whether to spread this
-   live. If early feedback on the rules is positive, forking PokerTH's web
-   client (Section 3.2 of the plan) is the next real chunk of work.
-6. **Start the analytics layer** (Section 4) in parallel with #5 — it's
-   independent work and the plan's hypothesis genuinely can't be validated
-   without it.
+   feedback.** The minimal client is enough to demo the *rules*; not
+   enough to demo *product polish* to a casino evaluating whether to
+   spread this live.
+6. **Start the analytics layer** (Section 4) — independent work, can run in
+   parallel with #5.
 
 ---
 
 ## 7. If you're a fresh Claude session picking this up
 
-Read, in order: this document, `README.md`, then
-`Hold_em_Plus___Technology_Development_Plan.md` for full product context.
-Run `pytest -q` first thing to confirm you're starting from a green
-baseline (154 passed) before changing anything. Every module has its own
-test file with the same name (`X.py` / `test_X.py`) — when extending a
-module, extend its test file in the same pass, the way every prior turn in
-this session did; that discipline is the reason the wiring bugs that did
-show up (preflop action order, a couple of API redaction gaps) were caught
-immediately rather than shipped.
+**Read Section 0 of this document first, in full** — it's the most
+current information and describes an open, diagnosed-but-unfixed bug that
+should be the first thing you work on.
+
+### If you can connect GitHub directly (recommended)
+
+Point the connector at `GameTech-Systems/holdem-plus` and pull the whole
+repo — the file count stops being a cost once you're not copy-pasting.
+
+### If you can't connect GitHub and someone's pasting files in by hand
+
+Ask for these, in this order, and treat everything else as "pull in only
+if a specific task needs it":
+
+1. **`HANDOFF.md`** (this file) — always first, always in full.
+2. **`README.md`** — run commands, one screen.
+3. **`api.py`** and **`static/index.html`** — Bug 2 lives entirely in the
+   interaction between these two files; nothing else is needed to fix it.
+4. **`orchestrator.py`** — needed to understand what `Hand.result` /
+   `HandResult` actually contain, since that's the data Bug 2's fix needs
+   to route through correctly.
+
+Everything else (`poker_types.py`, `hand_evaluator.py`,
+`betting_state_machine.py`, `side_pots.py`, `tournament_structure.py`,
+`tournament_balancing.py`, and all nine `test_*.py` files) is fully tested,
+stable, and not implicated in the currently-known open issue — only pull
+those in if a new task specifically touches that layer. Run `pytest -q`
+first thing regardless of how you got the files, to confirm the 154-passed
+baseline before changing anything.
