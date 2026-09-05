@@ -183,6 +183,18 @@
 
   .hint { font-size: 0.8rem; color: var(--muted); margin-top: 0.5rem; }
   a { color: var(--accent); }
+
+  #last-hand-banner {
+    display: none;
+    background: #24301F;
+    border: 1px solid #3C5A2C;
+    border-radius: 8px;
+    padding: 0.7rem 1rem;
+    margin-bottom: 1rem;
+    font-size: 0.9rem;
+  }
+  #last-hand-banner.visible { display: block; }
+  #last-hand-banner .winners { color: var(--win); font-weight: 700; }
 </style>
 </head>
 <body>
@@ -225,6 +237,8 @@
   </section>
 
   <section id="game-section" style="display:none;">
+    <div id="last-hand-banner"></div>
+
     <div class="table-wrap">
       <div class="felt">
         <div class="seats" id="seats"></div>
@@ -397,12 +411,14 @@ function renderCardBack() {
   return div;
 }
 
-let lastHandComplete = null;
+let lastShownHandKey = null;
 
 function render(state) {
   const communityEl = document.getElementById("community-cards");
   communityEl.innerHTML = "";
   const hand = state.hand;
+
+  renderLastHandBanner(state.last_hand);
 
   if (!hand) {
     document.getElementById("pot-line").textContent =
@@ -414,21 +430,40 @@ function render(state) {
 
   (hand.community_cards || []).forEach((c) => communityEl.appendChild(renderCard(c)));
 
-  const pot = Object.values(hand.payouts || {}).reduce((a, b) => a + b, 0);
   if (hand.is_complete) {
-    const winners = Object.entries(hand.payouts || {})
-      .map(([pid, amt]) => `${shortId(pid)} +${amt}`).join(", ");
-    document.getElementById("pot-line").textContent = winners ? `Hand complete — ${winners}` : "Hand complete.";
-    if (lastHandComplete !== JSON.stringify(hand.payouts)) {
-      log(`Hand complete: ${winners || "no payout"}`);
-      lastHandComplete = JSON.stringify(hand.payouts);
-    }
+    document.getElementById("pot-line").textContent = "Hand complete.";
   } else {
     document.getElementById("pot-line").textContent = `Blinds ${hand.small_blind}/${hand.big_blind}`;
   }
 
   renderSeats(hand);
   renderActions(hand);
+}
+
+function renderLastHandBanner(lastHand) {
+  const banner = document.getElementById("last-hand-banner");
+  if (!lastHand) {
+    banner.classList.remove("visible");
+    banner.innerHTML = "";
+    return;
+  }
+
+  // Key on the payouts + community cards so we only log a given
+  // completed hand once, even though `last_hand` stays present on
+  // every subsequent state push until the next hand finishes.
+  const key = JSON.stringify([lastHand.payouts, lastHand.community_cards]);
+
+  const winners = Object.entries(lastHand.payouts || {})
+    .map(([pid, amt]) => `${shortId(pid)} +${amt}`).join(", ");
+  banner.innerHTML = `Last hand: <span class="winners">${winners || "no payout"}</span>`
+    + (lastHand.community_cards && lastHand.community_cards.length
+        ? ` — board: ${lastHand.community_cards.join(" ")}` : "");
+  banner.classList.add("visible");
+
+  if (key !== lastShownHandKey) {
+    log(`Hand complete: ${winners || "no payout"}`);
+    lastShownHandKey = key;
+  }
 }
 
 function shortId(pid) { return pid ? pid.slice(0, 6) : pid; }
