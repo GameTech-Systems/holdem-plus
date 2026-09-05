@@ -314,6 +314,140 @@ def test_websocket_unknown_table_sends_error_and_closes():
 
 
 # ---------------------------------------------------------------------------
+# Hand-completion summary (see HANDOFF.md Bug 2)
+#
+# Regression coverage for the sequencing bug where complete_hand() ran,
+# then a brand-new hand was started and overwrote hands_by_table["T1"],
+# and only *then* was the state serialized -- so the finished hand's
+# payouts/is_complete never reached any client. These tests assert the
+# finished hand's summary is actually delivered, both in the direct REST
+# response to the action that ended the hand and in the WebSocket
+# broadcast that follows it.
+# ---------------------------------------------------------------------------
+
+def _play_to_first_hand_completion(table_id: str) -> dict:
+    """Checks/calls every actor's turn until a hand finishes (or the
+    tournament ends), returning the JSON body of the response to the
+    single REST action that completed that hand."""
+    for _ in range(40):
+        state = client.get(f"/tables/{table_id}/state").json()
+        if state["hand"] is None:
+            raise AssertionError("tournament ended before any hand completed")
+        actor = state["hand"]["current_actor"]
+        if actor is None:
+            raise AssertionError("no current actor but hand not complete")
+        actor_state = client.get(f"/tables/{table_id}/state", params={"player_id": actor}).json()
+        legal_actions = actor_state["hand"]["legal_actions"]
+        action_type = "CHECK" if "CHECK" in legal_actions else "CALL"
+        resp = client.post(f"/tables/{table_id}/actions", json={"player_id": actor, "action_type": action_type})
+        assert resp.status_code == 200
+        body = resp.json()
+        if body.get("last_hand") is not None:
+            return body
+    raise AssertionError("hand never completed within 40 actions")
+
+
+def test_hand_completion_response_includes_last_hand_payout():
+    """
+    The response to the specific action that ends a hand must carry that
+    hand's payouts and is_complete flag -- not just the state of the
+    already-started next hand. This is the test HANDOFF.md's Bug 2
+    write-up calls out as missing.
+    """
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    body = _play_to_first_hand_completion(table_id)
+
+    last_hand = body["last_hand"]
+    assert last_hand is not None
+    assert last_hand["is_complete"] is True
+    assert sum(last_hand["payouts"].values()) > 0
+
+
+def test_last_hand_persists_on_subsequent_polls_until_next_hand_finishes():
+    """
+    A client that misses the exact completing response (e.g. a fresh GET
+    or WS reconnect a moment later) should still be able to see what
+    happened in the most recently finished hand, not just clients that
+    happened to be watching at the exact instant it completed.
+    """
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    _play_to_first_hand_completion(table_id)
+
+    polled = client.get(f"/tables/{table_id}/state").json()
+    assert polled["last_hand"] is not None
+    assert polled["last_hand"]["is_complete"] is True
+
+
+def test_websocket_broadcast_after_hand_completion_includes_last_hand():
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    with client.websocket_connect(f"/ws/tables/{table_id}?player_id={p0}") as ws0, \
+         client.websocket_connect(f"/ws/tables/{table_id}?player_id={p1}") as ws1:
+        ws0.receive_json()
+        ws1.receive_json()
+
+        seen_last_hand = None
+        for _ in range(40):
+            state = client.get(f"/tables/{table_id}/state").json()
+            if state["hand"] is None:
+                break
+            actor = state["hand"]["current_actor"]
+            if actor is None:
+                break
+            actor_ws = ws0 if actor == p0 else ws1
+            other_ws = ws1 if actor == p0 else ws0
+            actor_state = client.get(f"/tables/{table_id}/state", params={"player_id": actor}).json()
+            legal = actor_state["hand"]["legal_actions"]
+            action_type = "CHECK" if "CHECK" in legal else "CALL"
+            actor_ws.send_json({"type": "action", "action_type": action_type})
+
+            actor_update = actor_ws.receive_json()
+            other_update = other_ws.receive_json()
+            if actor_update.get("last_hand") is not None:
+                seen_last_hand = actor_update["last_hand"]
+                assert other_update.get("last_hand") is not None
+                break
+
+        assert seen_last_hand is not None
+        assert seen_last_hand["is_complete"] is True
+        assert sum(seen_last_hand["payouts"].values()) > 0
+
+
+# ---------------------------------------------------------------------------
+# /app redirect (see HANDOFF.md Bug 1)
+# ---------------------------------------------------------------------------
+
+def test_app_redirect_is_relative_not_host_aware():
+    """
+    Regression test for the "/app -> localhost:8000" redirect bug:
+    requesting the no-trailing-slash form must redirect to a *relative*
+    "/app/" (no scheme or host baked in), so it still resolves correctly
+    behind a reverse proxy that doesn't forward the original Host (e.g.
+    Codespaces' port-forwarding proxy). Using an obviously-non-default
+    base_url here means this test would catch a regression to Starlette's
+    own host-aware mount redirect, which would bake that host back in.
+    """
+    proxied_client = TestClient(app, base_url="http://example-public-host.test")
+    resp = proxied_client.get("/app", follow_redirects=False)
+    assert resp.status_code in (307, 308)
+    assert resp.headers["location"] == "/app/"
+
+
+# ---------------------------------------------------------------------------
 # Rabbit hunt over REST
 # ---------------------------------------------------------------------------
 
