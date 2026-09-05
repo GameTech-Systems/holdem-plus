@@ -8,7 +8,7 @@ and `HANDOFF.md` for exactly where this stands and what's next.
 ## What's here
 
 ```
-poker_types.py             Card/HandCategory/HandRank primitives
+poker_types.py              Card/HandCategory/HandRank primitives
 hand_evaluator.py           best-5-of-8 hand evaluator
 betting_state_machine.py    per-street betting rounds + the full Hold'em
                              Plus dealing sequence (HandFlow)
@@ -19,18 +19,19 @@ orchestrator.py             Hand + Tournament -- wires all of the above
                              behind two classes, plus Rabbit Runner
 api.py                      REST + WebSocket layer over the orchestrator
 example_usage.py            runnable script showing the orchestrator API
-test_*.py                   154 tests, pytest
+test_*.py                   158 tests, pytest
 requirements.txt            fastapi / uvicorn / pydantic / pytest / httpx
 ```
 
 Every module above the API layer is dependency-free standard-library
-Python. All 154 tests pass as of this handoff.
+Python. All 158 tests pass as of this handoff (154 original + 4 added
+while fixing the two bugs described in `HANDOFF.md`).
 
 ## Running it
 
 ```bash
 pip install -r requirements.txt
-pytest -q                        # 154 passed
+pytest -q                        # 158 passed
 python3 example_usage.py         # orchestrator demo, no network
 uvicorn api:app --reload         # real server on http://127.0.0.1:8000
 ```
