@@ -1,0 +1,30 @@
+# Render Blueprint -- https://render.com/docs/blueprint-spec
+#
+# Uses Render's native Python runtime (no Docker needed; Render builds
+# straight from requirements.txt). Push this repo to GitHub, then in the
+# Render dashboard: New -> Blueprint -> pick this repo. Render reads this
+# file automatically and provisions the service below.
+#
+# Single-worker by design -- see Dockerfile's comment / HANDOFF.md
+# Section 3 for why: do not add more instances or raise the worker count
+# without first moving TABLES/GUESTS out of api.py's in-memory dicts.
+#
+# Render's free plan spins the instance down after a period of no
+# inbound traffic and cold-starts it on the next request -- that restart
+# wipes all in-memory tables/guests (same as any restart; there is no
+# persistence layer yet, see HANDOFF.md Section 4). Fine for an
+# occasionally-shared demo link; if you need it to reliably survive idle
+# periods with tables intact, use a paid plan with no scale-to-zero, or
+# Fly.io's `min_machines_running = 1` (see fly.toml) instead.
+
+services:
+  - type: web
+    name: holdem-plus-demo
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT --workers 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.3
+    healthCheckPath: /health

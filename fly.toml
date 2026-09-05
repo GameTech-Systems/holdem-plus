@@ -1,0 +1,36 @@
+# Fly.io app config -- https://fly.io/docs/reference/configuration/
+#
+# Deploy with `fly launch` (first time, it will offer to generate/overwrite
+# this file -- you can point it at this one instead) or `fly deploy` once
+# an app named below already exists. Requires the Dockerfile in this repo;
+# Fly builds it automatically, no extra build config needed here.
+#
+# `app` below is a placeholder -- Fly app names are globally unique, so
+# change it (e.g. add your own suffix) before your first `fly launch`/
+# `fly apps create`, or Fly will reject it if "holdem-plus-demo" is
+# already taken by someone else.
+
+app = "holdem-plus-demo"
+primary_region = "iad"
+
+[build]
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  # Keeping exactly one machine running at all times (rather than Fly's
+  # usual scale-to-zero) matters here specifically because this app keeps
+  # every table in an in-memory Python dict (see Dockerfile's comment /
+  # HANDOFF.md Section 3) -- a stopped-then-restarted machine wipes every
+  # table and guest that existed. If you'd rather take the cold-start
+  # hit than pay for an always-on machine, set this to 0 and
+  # auto_stop_machines back to true; just know a table can vanish
+  # mid-game if the machine spins down between requests.
+  min_machines_running = 1
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 256

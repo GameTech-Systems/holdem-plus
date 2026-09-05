@@ -19,19 +19,24 @@ orchestrator.py             Hand + Tournament -- wires all of the above
                              behind two classes, plus Rabbit Runner
 api.py                      REST + WebSocket layer over the orchestrator
 example_usage.py            runnable script showing the orchestrator API
-test_*.py                   158 tests, pytest
+test_*.py                   163 tests, pytest
 requirements.txt            fastapi / uvicorn / pydantic / pytest / httpx
+Dockerfile, .dockerignore   container image (Fly.io / Railway / Render-Docker)
+render.yaml                 Render Blueprint (native Python runtime)
+fly.toml                    Fly.io app config
+Procfile                    Railway start command
+DEPLOYMENT.md                step-by-step deploy instructions for all three
 ```
 
 Every module above the API layer is dependency-free standard-library
-Python. All 158 tests pass as of this handoff (154 original + 4 added
-while fixing the two bugs described in `HANDOFF.md`).
+Python. All 163 tests pass as of this handoff (154 original + 9 added
+while fixing the four bugs described in `HANDOFF.md`).
 
 ## Running it
 
 ```bash
 pip install -r requirements.txt
-pytest -q                        # 158 passed
+pytest -q                        # 163 passed
 python3 example_usage.py         # orchestrator demo, no network
 uvicorn api:app --reload         # real server on http://127.0.0.1:8000
 ```
@@ -39,6 +44,9 @@ uvicorn api:app --reload         # real server on http://127.0.0.1:8000
 With the server running, interactive API docs are at
 `http://127.0.0.1:8000/docs` (FastAPI's built-in Swagger UI) --
 useful for poking at endpoints by hand before wiring up a frontend.
+
+To put this on a real, shareable URL instead of just running it locally,
+see `DEPLOYMENT.md`.
 
 ## Quick manual walkthrough
 

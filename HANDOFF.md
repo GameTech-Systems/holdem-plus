@@ -11,6 +11,181 @@ Start with `README.md` for how to run things. This document is about
 
 ---
 
+## -2. Status as of the session that did the audit pass and deployment prep
+
+Following Section -1's own priority list ("audit-testing pass" then
+"deploy somewhere stable"), this session did both. **Two more real bugs
+turned up during the audit pass** -- exactly the outcome the pass was
+designed to find -- and both are now fixed and tested the same way Bug 1
+and Bug 2 were.
+
+### Bug 3: Rabbit hunt was unreachable through the API, unconditionally
+
+**Found by:** actually driving a heads-up hand to a turn fold through the
+real API, then immediately calling `POST /rabbit-hunt` -- the very
+scenario the feature exists for. It returned 400, every single time,
+regardless of timing.
+
+**Root cause:** `/rabbit-hunt` (REST) and the WS `rabbit_hunt` message
+both looked up `_current_hand(session)` -- but `Tournament.complete_hand()`
+deletes the just-finished `Hand` from `hands_by_table`, and
+`_start_next_hand_if_needed()` deals a replacement **synchronously, in the
+same request** that completed the old hand (no `await` runs in between,
+so there is no timing window in which another request could catch the old
+`Hand` still sitting there). That means `_current_hand()` can *never*
+again return a hand with `is_complete == True` to any later request --
+`/rabbit-hunt` was structurally incapable of succeeding, for every hand,
+every time, not just in some edge case. The one thing that *did* work
+correctly throughout was `Hand.rabbit_hunt()` itself and every
+orchestrator-level test of it -- because those tests call it directly on
+the live Python object, sidestepping the exact lookup-by-table indirection
+that was broken. This is the same root pattern as Bug 2 (starting the next
+hand too eagerly, before anything client-facing gets a chance to reference
+the one that just finished), just in a different endpoint.
+
+**Fix:** `TableSession` gained `last_completed_hand: Optional[Hand]` --
+the actual live `Hand` object (not just its `HandResult`), captured at the
+same moment and place as `last_hand_result`. Both `/rabbit-hunt` and the
+WS `rabbit_hunt` handler now look up `session.last_completed_hand`
+instead of `_current_hand(session)`, since a rabbit hunt is by definition
+always about the hand that just finished, never whatever's currently in
+progress. Same "most recent only" lifetime as `last_hand_result`: once a
+further hand completes, the window for the previous one closes, which is
+an accepted, documented limitation, not a new one.
+
+### Bug 4: the rabbit-hunt fee didn't actually cost anything
+
+**Found by:** once Bug 3's fix made the endpoint reachable, checking
+whether the stack deduction actually stuck -- it didn't.
+
+**Root cause:** `Hand.rabbit_hunt()` deducts the fee from its own
+`PlayerState.stack` and writes the new total into `self.result.final_stacks`
+-- but `Tournament.complete_hand()` had already copied `result.final_stacks`
+into the authoritative `Tournament.stacks` dict *before* the fee was ever
+paid (rabbit hunt only happens after a hand is already complete). Nothing
+ever wrote the post-fee stack back into `Tournament.stacks`, so the fee
+only ever showed up in an orphaned, never-read-again `HandResult` --
+functionally, rabbit hunts were free.
+
+**Fix:** both the REST and WS rabbit-hunt handlers now do
+`session.tournament.stacks[player_id] = hand.final_stacks()[player_id]`
+immediately after a successful `hand.rabbit_hunt()` call. One accepted
+limitation carried over from how blinds already work: if the *next* hand
+was already dealt before the fee was paid (the common case, since a new
+hand starts immediately), that hand's chip count for this player was
+locked in before the fee -- the fee correctly reduces the player's real
+stack for every hand *after* that one, but can't retroactively reach back
+into a hand already under way, the same way you can't retroactively
+change how many chips are already on the table for a hand in progress.
+
+**Also fixed while doing this:** the old `rabbit_hunt_eligible` field
+lived on the *live* `"hand"` payload and was computed by checking
+`hand.is_complete` on `_current_hand(session)` -- which, per Bug 3's
+finding, is never actually complete by the time any client sees it. That
+field was therefore always `False` for everyone, unconditionally, and has
+been removed from the live `"hand"` payload and correctly rebuilt on the
+`"last_hand"` payload instead, scoped per-viewer against
+`last_completed_hand` (so the folder sees `true`, the winner sees
+`false`). `static/index.html` was updated to match: the rabbit-hunt button
+now lives in the last-hand banner (where a real client can actually reach
+it) instead of a branch of the live action bar that, per Bug 3, could
+never actually be reached.
+
+**Regression tests added** (`test_api.py`): six new tests --
+`test_rabbit_hunt_succeeds_via_api_immediately_after_eligible_fold`,
+`test_rabbit_hunt_fee_is_reflected_in_ongoing_tournament_stack`,
+`test_last_hand_rabbit_hunt_eligible_is_scoped_to_the_right_player`,
+`test_rabbit_hunt_via_api_still_rejects_second_attempt`,
+`test_rabbit_hunt_over_websocket_also_works_and_updates_stacks`, plus the
+pre-existing ineligibility-rejection test. Five of the six were confirmed
+failing against the pre-Bug-3/4 code before the fix landed (the sixth,
+the ineligibility rejection, happened to pass either way, since a fresh
+table correctly has no completed hand to rabbit-hunt on regardless of
+which object is being asked).
+
+### Rest of the audit pass -- driven adversarially through the real API, not more unit tests
+
+Everything below was run against the live FastAPI app (via `TestClient`
+for breadth, and via a real `uvicorn` process over real HTTP for the
+concurrency and Bug-1-adjacent checks), specifically hunting for
+mismatches between engine state and what a client would actually see --
+the way Bug 2 was originally found. Findings beyond Bug 3/4 above: none
+that indicated an actual defect. Logged here anyway, per this doc's own
+instruction to log anything checked even when nothing was wrong:
+
+- **Multi-way all-in / side pots**, driven through the real API with
+  4 players at forced-unequal stacks (40/150/500/500, white-box-set via
+  `Tournament.stacks` the way real stack divergence happens naturally
+  over many hands): all four went all-in preflop, correct 3-tier side
+  pots resolved, `sum(last_hand.payouts) == sum(starting stacks)` exactly
+  (1190), `revealed_hands` correctly showed all four hole-card sets since
+  nobody folded. One methodology trap worth flagging for whoever does the
+  next audit pass: if your driving loop doesn't stop the instant a hand
+  completes, it will keep firing actions into the *next* auto-dealt hand
+  and overwrite `last_hand` before you read it -- not a bug, just a sharp
+  edge of the "only the most recent hand" design that's easy to trip over
+  when scripting against it.
+- **Folds at every street** (preflop/flop/turn/river), each verified via
+  `last_hand.community_cards` length (0/3/4/5 respectively) and
+  `revealed_hands == {}` in every case (nobody's hole cards leak on a
+  fold-to-one-winner, at any street).
+- **Concurrent/duplicate action submission**, fired via real threads
+  against a real running `uvicorn` process (not `TestClient`, which
+  wouldn't exercise genuine concurrent connections): a truly-out-of-turn
+  concurrent request is cleanly rejected (400) with no corruption; a
+  genuine duplicate submission for the *same* decision point (same
+  player, same turn, fired twice at once) resolves to exactly one 200 and
+  one clean 400 "not your turn," never a double-application. This is a
+  direct consequence of the documented single-worker/no-`await`-inside-
+  the-engine-call constraint (Section 3) doing its job -- worth
+  re-verifying if that constraint is ever relaxed (e.g. multiple workers,
+  or an `await` introduced partway through a request handler), since nothing
+  currently guards these operations with an explicit lock; sequential
+  single-process execution is the only thing preventing a real race today.
+- **Tournament-completion boundary**: `last_hand` and
+  `last_hand.rabbit_hunt_eligible` both correctly persist and evaluate
+  correctly even after `status` flips to `"complete"` and `"hand"` becomes
+  `null` (heads-up bust-out via all-in showdown) -- because
+  `last_hand_result`/`last_completed_hand` are set unconditionally on
+  every hand completion, before the code that decides whether a new hand
+  gets dealt even runs.
+- **WebSocket-driven full hand**, checked at every single street: hole
+  cards correctly redacted to the non-viewer at every broadcast, both
+  viewers correctly see both real hands in `last_hand.revealed_hands` at
+  a genuine showdown, `last_hand` arrives on both sockets' broadcasts
+  simultaneously.
+
+### Deployment prep
+
+Added `Dockerfile` + `.dockerignore` (Fly.io/Railway/Render-Docker),
+`render.yaml` (Render's native Python runtime, no Docker needed),
+`fly.toml`, `Procfile` (Railway), and `DEPLOYMENT.md` walking through all
+three platforms named in Section -1's priority list, step by step.
+
+**All three configs are pinned to exactly one worker/instance, on
+purpose** -- restated prominently in `DEPLOYMENT.md` and in comments in
+each config file, since this is a correctness requirement (in-memory
+`TABLES`/`GUESTS`), not a performance knob. Also flagged clearly: a
+restart (deploy, crash, or free-tier idle scale-to-zero) wipes every
+table, same as it already does locally.
+
+**What I could and couldn't verify here:** no Docker binary is available
+in this sandbox, and this sandbox's network allowlist doesn't reach
+Render/Fly.io/Railway (or Docker's own registry) regardless -- so I
+couldn't literally build the image or execute a real deploy. What I did
+verify directly: the exact `pip install -r requirements.txt` and
+`uvicorn api:app --host 0.0.0.0 --port <PORT> --workers 1` commands each
+config runs, against a real venv, including with `$PORT` supplied via
+environment variable the way Render/Railway inject it -- and, on that
+real running process, re-confirmed Bug 1's fix (`GET /app` on a live
+server still returns a bare relative `location: /app/`, not a host-baked
+URL). **Actually deploying to any of the three platforms, and doing the
+DEPLOYMENT.md-recommended two-tab check against a real public URL, is the
+next concrete step and needs to happen on infrastructure this session
+couldn't reach.**
+
+---
+
 ## -1. Status as of the session that fixed Bug 1 and Bug 2 — read this first
 
 Both bugs flagged in Section 0 below (kept intact beneath this note as the
@@ -362,18 +537,15 @@ Updated priority order, given this session's findings:
 
 1. ~~**Fix Bug 2 (hand-completion summary)**~~ **Done — see Section -1.**
 2. ~~**Fix Bug 1 (`/app` proxy redirect)**~~ **Done — see Section -1.**
-3. **Do a real audit-testing pass**, not more unit tests: play many hands
-   deliberately trying to break the sequencing (multi-way all-ins, rabbit
-   hunts, folds at every street, rapid actions from two tabs at once) and
-   watch for mismatches between engine state and what the UI shows, the
-   way Bug 2 was found. Log anything that looks off even if you can't
-   immediately explain it. **This is now the top of the list.**
-4. **Deploy somewhere with a stable, non-Codespaces URL.** Codespaces was
-   great for verification but isn't meant to be a durable public link —
-   it's tied to being logged into your GitHub account and isn't designed
-   to run unattended. A single-process free tier (Render, Fly.io, Railway)
-   is the right target for an actual shareable demo link (remember the
-   single-worker constraint from Section 3).
+3. ~~**Do a real audit-testing pass**~~ **Done — see Section -2.** Found
+   and fixed two more real bugs (Bug 3: rabbit hunt unreachable through
+   the API; Bug 4: rabbit-hunt fee didn't actually cost anything).
+4. ~~**Deploy somewhere with a stable, non-Codespaces URL**~~ **Prepped,
+   not executed — see Section -2.** `Dockerfile`, `render.yaml`,
+   `fly.toml`, `Procfile`, and `DEPLOYMENT.md` are all ready; picking a
+   platform and actually clicking through the deploy is the next concrete
+   step, and needs real platform credentials this session didn't have.
+   **This is now the top of the list.**
 5. **Decide whether to invest in a real frontend now or after initial
    feedback.** The minimal client is enough to demo the *rules*; not
    enough to demo *product polish* to a casino evaluating whether to
@@ -385,10 +557,11 @@ Updated priority order, given this session's findings:
 
 ## 7. If you're a fresh Claude session picking this up
 
-**Read Section -1, then Section 0, in full** — Section -1 is the most
-current information (both previously-open bugs are now fixed and tested);
-Section 0 is the diagnostic record of how they were found and is still
-useful background, especially for the audit-testing pass in Section 6.
+**Read Section -2, then Section -1, then Section 0, in full** — Section -2
+is the most current information (audit pass complete, two more bugs found
+and fixed, deployment prepped but not executed); Section -1 covers Bug 1
+and Bug 2; Section 0 is the original diagnostic record. All three are
+useful background for anything touching `api.py` or a further audit pass.
 
 ### If you can connect GitHub directly (recommended)
 
@@ -417,8 +590,9 @@ if a specific task needs it":
 Everything else (`poker_types.py`, `hand_evaluator.py`,
 `betting_state_machine.py`, `side_pots.py`, `tournament_structure.py`,
 `tournament_balancing.py`, and all nine `test_*.py` files other than
-`test_api.py`) is fully tested, stable, and not implicated in either
-now-fixed issue — only pull those in if a new task specifically touches
-that layer. Run `pytest -q` first thing regardless of how you got the
-files, to confirm the **158**-passed baseline (154 original + 4 from this
-session) before changing anything.
+`test_api.py`) is fully tested, stable, and not implicated in any of the
+four now-fixed issues — only pull those in if a new task specifically
+touches that layer. Run `pytest -q` first thing regardless of how you got
+the files, to confirm the **163**-passed baseline (154 original + 9 added
+across the two sessions covered by this document) before changing
+anything.

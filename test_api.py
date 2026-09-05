@@ -448,8 +448,151 @@ def test_app_redirect_is_relative_not_host_aware():
 
 
 # ---------------------------------------------------------------------------
-# Rabbit hunt over REST
+# Rabbit hunt over REST (see also HANDOFF.md Bug 3 and Bug 4)
 # ---------------------------------------------------------------------------
+
+def _play_heads_up_to_turn_fold(table_id: str) -> str:
+    """
+    Drives a fresh heads-up hand from deal through checks/calls to the
+    turn betting street, then folds whoever is left to act -- ending the
+    hand immediately and making that player rabbit-hunt eligible.
+    Returns the folding player's id. Always reads current_actor from
+    state rather than assuming a fixed seat order, since Tournament.create
+    shuffles seating.
+    """
+    def act_current(preferred: str = None) -> str:
+        state = client.get(f"/tables/{table_id}/state").json()
+        actor = state["hand"]["current_actor"]
+        actor_view = client.get(f"/tables/{table_id}/state", params={"player_id": actor}).json()
+        legal = actor_view["hand"]["legal_actions"]
+        action_type = preferred if preferred and preferred in legal else (
+            "CHECK" if "CHECK" in legal else "CALL"
+        )
+        resp = client.post(f"/tables/{table_id}/actions", json={"player_id": actor, "action_type": action_type})
+        assert resp.status_code == 200
+        return actor
+
+    act_current()  # preflop: first actor calls (can't check, owes the blind)
+    act_current()  # preflop: closes
+    act_current()  # flop betting: check
+    act_current()  # flop betting: closes -> turn
+
+    state = client.get(f"/tables/{table_id}/state").json()
+    folder = state["hand"]["current_actor"]
+    resp = client.post(f"/tables/{table_id}/actions", json={"player_id": folder, "action_type": "FOLD"})
+    assert resp.status_code == 200
+    return folder
+
+
+def test_rabbit_hunt_succeeds_via_api_immediately_after_eligible_fold():
+    """
+    Regression test for HANDOFF.md Bug 3: the very first rabbit-hunt
+    attempt right after a legitimately-eligible turn fold must succeed,
+    not 400 -- even though the API has already auto-dealt a brand new
+    hand by the time this request arrives, same as every other response.
+    Before the fix, the endpoint looked up _current_hand(session) (the
+    NEW hand, always incomplete) instead of the hand that actually just
+    finished, so this failed unconditionally, on every single hand,
+    regardless of timing.
+    """
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    folder = _play_heads_up_to_turn_fold(table_id)
+
+    resp = client.post(f"/tables/{table_id}/rabbit-hunt", json={"player_id": folder})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["river"]) == 1
+    assert body["cost"] > 0
+
+
+def test_rabbit_hunt_fee_is_reflected_in_ongoing_tournament_stack():
+    """
+    Regression test for HANDOFF.md Bug 4: paying for a rabbit hunt must
+    actually leave the player's real, ongoing tournament stack (the one
+    future hands are dealt from), not just an orphaned HandResult that
+    nothing reads again. Before the fix this fee was silently free.
+    """
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    folder = _play_heads_up_to_turn_fold(table_id)
+    stack_before = client.get(f"/tables/{table_id}/state").json()["stacks"][folder]
+
+    resp = client.post(f"/tables/{table_id}/rabbit-hunt", json={"player_id": folder})
+    cost = resp.json()["cost"]
+    assert cost > 0
+
+    stack_after = client.get(f"/tables/{table_id}/state").json()["stacks"][folder]
+    assert stack_before - stack_after == cost
+
+
+def test_last_hand_rabbit_hunt_eligible_is_scoped_to_the_right_player():
+    """
+    rabbit_hunt_eligible must be computed per-viewer against the hand
+    that actually just finished -- the folder sees True, the winner
+    (who has nothing to rabbit hunt) sees False. This flag previously
+    lived on the *live* hand payload and was checked against whatever
+    hand was currently in progress, which -- per Bug 3 -- is never the
+    hand this question is actually about, so it was always False for
+    everyone regardless of who was asking.
+    """
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    folder = _play_heads_up_to_turn_fold(table_id)
+    winner = p1 if folder == p0 else p0
+
+    folder_view = client.get(f"/tables/{table_id}/state", params={"player_id": folder}).json()
+    winner_view = client.get(f"/tables/{table_id}/state", params={"player_id": winner}).json()
+
+    assert folder_view["last_hand"]["rabbit_hunt_eligible"] is True
+    assert winner_view["last_hand"]["rabbit_hunt_eligible"] is False
+
+
+def test_rabbit_hunt_via_api_still_rejects_second_attempt():
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    folder = _play_heads_up_to_turn_fold(table_id)
+    first = client.post(f"/tables/{table_id}/rabbit-hunt", json={"player_id": folder})
+    assert first.status_code == 200
+    second = client.post(f"/tables/{table_id}/rabbit-hunt", json={"player_id": folder})
+    assert second.status_code == 400
+
+
+def test_rabbit_hunt_over_websocket_also_works_and_updates_stacks():
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    folder = _play_heads_up_to_turn_fold(table_id)
+    stack_before = client.get(f"/tables/{table_id}/state").json()["stacks"][folder]
+
+    with client.websocket_connect(f"/ws/tables/{table_id}?player_id={folder}") as ws:
+        ws.receive_json()  # initial state on connect
+        ws.send_json({"type": "rabbit_hunt"})
+        update = ws.receive_json()
+        assert update["type"] == "state"
+
+    stack_after = client.get(f"/tables/{table_id}/state").json()["stacks"][folder]
+    assert stack_after < stack_before
+
 
 def test_rabbit_hunt_rest_endpoint_rejects_ineligible_player():
     table_id = make_table(max_seats=2, starting_stack=1000)

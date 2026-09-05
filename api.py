@@ -81,6 +81,21 @@ class TableSession:
     # missed broadcast, a fresh GET /state, or a WS reconnect a moment
     # later, not just the exact instant the hand completed.
     last_hand_result: Optional[HandResult] = None
+    # The actual just-finished Hand object (not just its HandResult),
+    # kept alive for exactly as long as last_hand_result above so
+    # /rabbit-hunt has something to call .rabbit_hunt() on (see
+    # HANDOFF.md Bug 3 -- Tournament.complete_hand() deletes the Hand
+    # from hands_by_table and only ever returns/keeps its HandResult, so
+    # rabbit_hunt() -- a method on the live Hand, needing its mutable
+    # PlayerState/rabbit_hunts bookkeeping -- had no object left to run
+    # against by the time any client could ever call the endpoint; a
+    # replacement hand is dealt synchronously in the same request that
+    # completed the old one, so there is no timing window in which
+    # _current_hand() could still return it). Same "most recent only"
+    # lifetime/limitation as last_hand_result: once a further hand
+    # completes, this reference moves on and the previous rabbit-hunt
+    # window is gone, matching how last_hand_result already behaves.
+    last_completed_hand: Optional[Hand] = None
 
 
 GUESTS: Dict[str, str] = {}          # player_id -> display_name
@@ -142,13 +157,31 @@ class RabbitHuntRequest(BaseModel):
 # State serialization -- redacts hole cards the viewer isn't allowed to see
 # ---------------------------------------------------------------------------
 
-def _serialize_hand_result(result: HandResult) -> dict:
+def _serialize_hand_result(
+    result: HandResult,
+    hand: Optional[Hand],
+    viewer_player_id: Optional[str],
+) -> dict:
     """Serializes a *finished* hand's outcome for the 'last_hand' field --
     same card-stringification convention as the live 'hand' payload
     below, but there's no viewer-based redaction to do here: every card
     in revealed_hands already went to showdown and is public, and a
     folded player's hole cards were never added to revealed_hands in the
-    first place (see orchestrator.Hand._finalize)."""
+    first place (see orchestrator.Hand._finalize).
+
+    `hand`, if given, is the actual Hand object this result came from
+    (see TableSession.last_completed_hand) -- used only to compute
+    rabbit_hunt_eligible for the requesting viewer. This is the correct
+    home for that flag: it was previously computed against whatever hand
+    happened to be *currently* in progress, which (per HANDOFF.md Bug 3)
+    is never the hand this eligibility question is actually about.
+    """
+    rabbit_hunt_eligible = (
+        hand is not None
+        and viewer_player_id is not None
+        and hand.is_eligible_for_rabbit_hunt(viewer_player_id)
+        and viewer_player_id not in hand.rabbit_hunts
+    )
     return {
         "is_complete": True,
         "payouts": dict(result.payouts),
@@ -157,6 +190,7 @@ def _serialize_hand_result(result: HandResult) -> dict:
             pid: [str(c) for c in cards] for pid, cards in result.revealed_hands.items()
         },
         "folded_players": list(result.folded_players),
+        "rabbit_hunt_eligible": rabbit_hunt_eligible,
     }
 
 
@@ -167,7 +201,9 @@ def _serialize_state(session: TableSession, viewer_player_id: Optional[str]) -> 
         "max_seats": session.max_seats,
         "seated_players": list(session.player_ids),
         "last_hand": (
-            _serialize_hand_result(session.last_hand_result)
+            _serialize_hand_result(
+                session.last_hand_result, session.last_completed_hand, viewer_player_id
+            )
             if session.last_hand_result is not None
             else None
         ),
@@ -201,13 +237,6 @@ def _serialize_state(session: TableSession, viewer_player_id: Optional[str]) -> 
     if viewer_player_id and not hand.is_complete and viewer_player_id == hand.current_actor_id:
         legal_actions = [a.name for a in hand.legal_actions(viewer_player_id)]
 
-    rabbit_hunt_eligible = (
-        viewer_player_id is not None
-        and hand.is_complete
-        and hand.is_eligible_for_rabbit_hunt(viewer_player_id)
-        and viewer_player_id not in hand.rabbit_hunts
-    )
-
     payload["hand"] = {
         "small_blind": hand.small_blind,
         "big_blind": hand.big_blind,
@@ -217,7 +246,6 @@ def _serialize_state(session: TableSession, viewer_player_id: Optional[str]) -> 
         "legal_actions": legal_actions,
         "is_complete": hand.is_complete,
         "payouts": hand.result.payouts if hand.is_complete else None,
-        "rabbit_hunt_eligible": rabbit_hunt_eligible,
     }
     return payload
 
@@ -312,10 +340,14 @@ async def apply_action(table_id: str, payload: ActionRequest) -> dict:
 
     if hand.is_complete:
         assert session.tournament is not None
-        # Capture the finished hand's result BEFORE starting the next
-        # hand, which immediately overwrites hands_by_table["T1"] --
-        # see the last_hand_result field comment on TableSession.
+        # Capture both the finished hand's result AND the live Hand
+        # object itself BEFORE starting the next hand, which immediately
+        # overwrites hands_by_table["T1"] -- see the last_hand_result /
+        # last_completed_hand field comments on TableSession. Losing the
+        # live object (not just its result) is exactly what made
+        # /rabbit-hunt unreachable before (HANDOFF.md Bug 3).
         session.last_hand_result = session.tournament.complete_hand(INTERNAL_TABLE_ID)
+        session.last_completed_hand = hand
         _start_next_hand_if_needed(session)
 
     await _broadcast_state(session)
@@ -325,7 +357,12 @@ async def apply_action(table_id: str, payload: ActionRequest) -> dict:
 @app.post("/tables/{table_id}/rabbit-hunt")
 async def rabbit_hunt(table_id: str, payload: RabbitHuntRequest) -> dict:
     session = _get_table(table_id)
-    hand = _current_hand(session)
+    # Deliberately NOT _current_hand(session): a rabbit hunt is always
+    # about the hand that just finished, never whatever's currently in
+    # progress (a new hand is dealt synchronously the moment the old one
+    # completes, so _current_hand() would never be the right hand to ask
+    # -- see HANDOFF.md Bug 3).
+    hand = session.last_completed_hand
     if hand is None:
         raise HTTPException(400, "No hand to rabbit hunt on")
 
@@ -333,6 +370,18 @@ async def rabbit_hunt(table_id: str, payload: RabbitHuntRequest) -> dict:
         river = hand.rabbit_hunt(payload.player_id)
     except OrchestratorError as exc:
         raise HTTPException(400, str(exc))
+
+    # hand.rabbit_hunt() only updates its own (orphaned) HandResult --
+    # Tournament.stacks was already snapshotted by complete_hand() before
+    # this fee was paid, so without this line the fee would never
+    # actually leave the player's real, ongoing tournament bankroll (see
+    # HANDOFF.md Bug 4). Note this can only affect hands that haven't
+    # been dealt yet: the *next* hand may already be in progress (dealt
+    # the instant the rabbit-hunt-eligible hand completed) using the
+    # pre-fee stack, same as how a blind post can't retroactively change
+    # chips already committed to a hand already under way.
+    if session.tournament is not None:
+        session.tournament.stacks[payload.player_id] = hand.final_stacks()[payload.player_id]
 
     await _broadcast_state(session)
     return {"river": [str(c) for c in river], "cost": hand.rabbit_hunts[payload.player_id]}
@@ -380,13 +429,17 @@ async def _handle_ws_message(session: TableSession, player_id: Optional[str], ms
             if hand.is_complete:
                 assert session.tournament is not None
                 session.last_hand_result = session.tournament.complete_hand(INTERNAL_TABLE_ID)
+                session.last_completed_hand = hand
                 _start_next_hand_if_needed(session)
         elif msg_type == "rabbit_hunt":
             if player_id is None:
                 raise OrchestratorError("Connect with ?player_id=... to rabbit hunt")
-            if hand is None:
+            completed_hand = session.last_completed_hand
+            if completed_hand is None:
                 raise OrchestratorError("No hand to rabbit hunt on")
-            hand.rabbit_hunt(player_id)
+            completed_hand.rabbit_hunt(player_id)
+            if session.tournament is not None:
+                session.tournament.stacks[player_id] = completed_hand.final_stacks()[player_id]
         else:
             raise OrchestratorError(f"Unknown message type: {msg_type!r}")
     except (OrchestratorError, IllegalActionError, KeyError) as exc:
