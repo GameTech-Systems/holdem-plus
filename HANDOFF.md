@@ -11,6 +11,134 @@ Start with `README.md` for how to run things. This document is about
 
 ---
 
+## -3. Status as of the session that actually went live — read this first
+
+**The demo is live.** Deployed to Render (Blueprint deploy from
+`render.yaml`, no CLI or Docker involved) at:
+
+**`https://holdem-plus-demo.onrender.com`**
+
+Confirmed working on the real public URL, not just locally/in Codespaces:
+- `GET /health` → `{"status":"ok"}`
+- `GET /app/` loads the demo client
+- `GET /app` (no trailing slash) correctly redirects to `/app/` — this is
+  the real-world confirmation of Bug 1's fix that Section -2 flagged as
+  still outstanding ("needs to happen on infrastructure this session
+  couldn't reach"). It works.
+- A full heads-up hand was played end-to-end across two separate browser
+  sessions (one normal window, one Incognito, so they got distinct guest
+  ids) on the live Render URL. It went to an all-in preflop confrontation
+  and resolved correctly: `last_hand` showed the right winner, payout, and
+  board on both sessions simultaneously.
+
+**Two things came up during that live play session.** One is understood
+and is *not* a bug; the other is a genuinely open question that needs
+real investigation, not more reasoning from the existing test suite,
+since the test suite already covers the scenario I *think* is happening
+and says it's fine.
+
+### Observation 1 — instant jump to result on an all-in, no visible runout (NOT a bug)
+
+**What happened:** both players went all-in preflop. The client jumped
+straight from the betting screen to the "Last hand" result banner,
+without ever showing the flop/turn/river appear on the felt.
+
+**Why this is correct, not broken:** once neither player has any more
+decisions to make, `Hand._progress()` (orchestrator.py) legitimately
+advances straight through every remaining street --dealing the flop, 3rd
+hole card, 4th and 5th street, revealing them, and reaching showdown --
+all synchronously, inside the single API call that made the second
+player's `ALL_IN` action. This is exactly what
+`test_all_in_preflop_heads_up_runs_board_out_automatically` in
+`test_orchestrator.py` asserts and has asserted since before this
+session. The engine computed the board correctly (it's right there in
+`last_hand.community_cards`, e.g. `5h 6d Tc Ac Kc` in this session's
+test); the client just has no concept of animating a runout, so it only
+ever shows whatever the one API response it got contains, which is
+already the final state.
+
+**Not urgent, but worth doing eventually:** a real poker client pauses
+and deals the remaining board one card at a time with a beat in between
+for exactly this moment -- it's the most dramatic point in the hand. Add
+this to the "real frontend" bucket (Section 4/6) rather than treating it
+as a bug to hotfix in `static/index.html`; it's a presentation
+enhancement, not a correctness gap.
+
+### Observation 2 — rabbit-hunt button didn't appear after a turn fold (OPEN, unresolved)
+
+**What happened:** in a subsequent hand (on presumably a fresh
+table/tournament, since the first one ended in the all-in above), the
+tester folded intending to test Rabbit Runner, expecting the "Rabbit
+hunt" button to appear per Bug 3/4's fix from the previous session. It
+did not appear.
+
+**Leading hypothesis, not yet confirmed:** the client currently displays
+*no indication anywhere of which betting street is active* -- no "Flop" /
+"Turn" / "River" label, just however many community cards happen to be
+showing. Rabbit hunt is only offered after folding during `TURN_BETTING`
+or `RIVER_BETTING` (4 or 5 community cards on board), not `FLOP_BETTING`
+(3 cards) -- see `Hand.is_eligible_for_rabbit_hunt()` in
+`orchestrator.py`, unchanged and still correct as of the last session's
+audit. It's easy to fold one street earlier than intended with nothing on
+screen to check against. If this is what happened, the fix is a UI
+addition (show the current street name), not a backend change --
+everything backend-side was thoroughly audited last session (six new
+passing tests specifically covering rabbit hunt through the real API,
+five of which were confirmed to fail against the pre-fix code first).
+
+**But this is NOT confirmed**, and shouldn't be treated as closed until
+it is. The key unknown: **how many community cards were actually showing
+on the board at the moment of that fold** -- 3 (flop betting -- confirms
+the hypothesis, not a bug, just needs a street-name UI label) or 4 (turn
+betting -- meaning eligibility should have been `true` and something is
+genuinely broken on the *live Render deployment specifically*, which
+would be a more serious and more interesting finding, since it would mean
+something differs between this real deployment and the sandboxed
+environment 163 passing tests were run against).
+
+**Concrete next steps, in order:**
+1. **Get that one data point first** -- ask whoever was testing how many
+   community cards were visible at the moment of the fold in question, or
+   just re-run the test on the live URL, taking a screenshot at the
+   moment of folding.
+2. **If it was 3 cards (flop):** not a bug. Add a street-name label to
+   `static/index.html`'s board display (e.g. next to the pot-line text --
+   `hand.community_cards.length` already tells you which street you're
+   on: 0=preflop, 3=flop, 4=turn, 5=river) so this ambiguity can't recur,
+   and close this out.
+3. **If it was 4 cards (turn) and the button still didn't appear:** this
+   is a real, unconfirmed bug and needs actual debugging against the live
+   deployment, not just re-reading the code that already passed 163
+   tests locally. Concretely: reproduce the exact same scenario (heads-up,
+   fold on a confirmed-4-community-card turn) against
+   `https://holdem-plus-demo.onrender.com` directly (curl/requests against
+   the real URL, not TestClient), and diff what `last_hand.rabbit_hunt_eligible`
+   actually comes back as in the raw JSON response versus what the
+   client renders from it -- the bug could be anywhere in that path: a
+   stale deployed version of `static/index.html` not matching what's in
+   the repo (worth first just hard-checking the deployed `/app/` page's
+   view-source against the local file), a genuine backend edge case the
+   audit pass didn't happen to hit, or a client-side JS issue specific to
+   real browser conditions that `TestClient`-based testing can't surface
+   (e.g. a caching issue, a race between the WS broadcast and a `pollState()`
+   call stomping on each other -- see `static/index.html`'s `onclose`
+   fallback-to-polling logic as a place to look if the WebSocket dropped
+   at any point during that session).
+4. Either way, re-run the exact two-tab live test from Section -3's intro
+   once more afterward to confirm the fix (or confirm there was nothing
+   to fix) before considering this closed.
+
+### What's next, given all this
+
+1. Resolve Observation 2 per the steps above -- this is the one open
+   thread from an otherwise fully-verified live deployment.
+2. Everything in Sections 4-6 below (a real frontend, the runout-animation
+   idea from Observation 1, the analytics layer, persistence,
+   multi-table routing) is unchanged and still open, and none of it is
+   blocking -- the demo is genuinely live and shareable right now.
+
+---
+
 ## -2. Status as of the session that did the audit pass and deployment prep
 
 Following Section -1's own priority list ("audit-testing pass" then
@@ -557,11 +685,14 @@ Updated priority order, given this session's findings:
 
 ## 7. If you're a fresh Claude session picking this up
 
-**Read Section -2, then Section -1, then Section 0, in full** — Section -2
-is the most current information (audit pass complete, two more bugs found
-and fixed, deployment prepped but not executed); Section -1 covers Bug 1
-and Bug 2; Section 0 is the original diagnostic record. All three are
-useful background for anything touching `api.py` or a further audit pass.
+**Read Section -3, then Section -2, then Section -1, then Section 0, in
+full.** Section -3 is the most current information: the demo is actually
+live at `https://holdem-plus-demo.onrender.com`, and there's exactly one
+open, unconfirmed question waiting on you (the rabbit-hunt-button
+observation) with precise next steps already laid out. Sections -2/-1/0
+are useful background for anything touching `api.py`, `orchestrator.py`,
+or `static/index.html`, which is almost certainly where Observation 2's
+investigation will lead.
 
 ### If you can connect GitHub directly (recommended)
 
