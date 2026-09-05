@@ -11,7 +11,99 @@ Start with `README.md` for how to run things. This document is about
 
 ---
 
+## -1. Status as of the session that fixed Bug 1 and Bug 2 — read this first
+
+Both bugs flagged in Section 0 below (kept intact beneath this note as the
+diagnostic record) are now **fixed and tested**. Per this document's own
+instruction ("write the test before fixing it"), a failing regression test
+was written and confirmed to fail against the old code *before* either fix
+landed:
+
+- **Bug 2 (hand-completion summary) — fixed.** `TableSession` gained a
+  `last_hand_result: Optional[HandResult]` field. Both completion sites
+  (`apply_action` and `_handle_ws_message`) now do
+  `session.last_hand_result = session.tournament.complete_hand(...)`
+  *before* `_start_next_hand_if_needed()` overwrites `hands_by_table["T1"]`,
+  instead of discarding the return value. `_serialize_state()` now includes
+  a top-level `"last_hand"` field (via a new `_serialize_hand_result()`
+  helper), populated from `last_hand_result` whenever it's set. This was a
+  deliberate choice over a one-off `{"type": "hand_result", ...}` WS message
+  (the alternative this doc originally floated): a persistent field means
+  the REST response to the very action that ended the hand carries the
+  result *and* a client that reconnects or polls a moment later still sees
+  it, not just clients that happened to be listening at the exact instant
+  the hand completed. `static/index.html`'s `render()` was updated to read
+  `state.last_hand` and show a "Last hand: ..." banner, keyed off
+  `payouts`+`community_cards` so it only logs each completed hand once even
+  though the field stays populated across subsequent state pushes.
+  Three new tests in `test_api.py`
+  (`test_hand_completion_response_includes_last_hand_payout`,
+  `test_last_hand_persists_on_subsequent_polls_until_next_hand_finishes`,
+  `test_websocket_broadcast_after_hand_completion_includes_last_hand`) cover
+  the REST response, a later poll, and the WS broadcast respectively; all
+  three were confirmed failing against the pre-fix code first.
+- **Bug 1 (`/app` redirect leaking `localhost`) — fixed.** Added an explicit
+  `@app.get("/app")` route, registered ahead of the `StaticFiles` mount,
+  that returns `RedirectResponse(url="/app/")` -- a bare relative path, no
+  scheme or host. This sidesteps the underlying problem entirely rather
+  than trying to teach Starlette/uvicorn to trust proxy-forwarded headers:
+  Starlette's own mount-level redirect builds an *absolute* URL from the
+  server's own view of its host (confirmed by comparison during this
+  session -- against a non-default `base_url` it produced
+  `http://example-public-host.test/app/`, baking the host in), which is
+  exactly what goes wrong behind a proxy that doesn't forward the original
+  Host header. A relative redirect can't have this problem, because the
+  browser resolves it against whatever origin it's actually talking to.
+  New test: `test_app_redirect_is_relative_not_host_aware` in `test_api.py`,
+  which deliberately uses a non-default `base_url` so it would catch a
+  regression back to the host-aware mount redirect.
+
+**Verification done this session:**
+- Full suite: **158 passed** (154 baseline + 3 for Bug 2 + 1 for Bug 1),
+  confirmed with a real `pytest -q` run against the reconstructed repo.
+- Both fixes were also verified against a real `uvicorn` process (not just
+  FastAPI's `TestClient`) over real HTTP: played a full hand end-to-end via
+  plain `requests` calls and confirmed the completing action's JSON
+  response contained a populated `last_hand` (real payouts, revealed
+  hands, community cards); separately confirmed `GET /app` on that live
+  process returns `307` with `Location: /app/` (relative, no host).
+- The static mount itself was confirmed still working normally after
+  adding the explicit redirect route ahead of it (`GET /app/` and
+  `GET /app/index.html` both still serve the real file, `200`, correct
+  content-type/length) -- i.e. the new route didn't shadow or break the
+  mount for anything other than the exact bare `/app` path it targets.
+
+**One important caveat on how this session worked:** the actual GitHub repo
+(`GameTech-Systems/holdem-plus`, private) could not be cloned in this
+session -- no GitHub credentials/connector were available, and
+`git clone https://github.com/...` failed with an auth error. Everything
+above was done by reconstructing the repo's files locally from the content
+pasted into the conversation (which matches what this HANDOFF describes as
+current), running the real test suite and a real `uvicorn` process against
+that reconstruction, and producing exact diffs. **The next session (or you,
+right now) still needs to actually apply these changes to the real repo and
+commit/push them** -- that part could not be done from here. The diffs are
+small and self-contained (all in `api.py`, `test_api.py`, and
+`static/index.html`).
+
+**What's next, given this:**
+1. Apply the `api.py` / `test_api.py` / `static/index.html` changes to the
+   real repo (copy the reconstructed files, or apply the diff) and confirm
+   `pytest -q` still says 158 passed there.
+2. Do the real audit-testing pass this doc's Section 6 calls for (item 3):
+   multi-way all-ins, rabbit hunts, folds at every street, two tabs acting
+   rapidly -- now with `last_hand` in place, this is the first time that
+   audit pass can actually *see* what happened at showdown while doing it,
+   which was the whole blocker before.
+3. Everything else in Sections 4-6 below (analytics layer, persistence,
+   multi-table routing, a real frontend) is unchanged and still open.
+
+---
+
 ## 0. Status as of the most recent session — read this first
+
+*(This section is the diagnostic record from the session that first found*
+*Bug 1 and Bug 2, kept as-is below Section -1's update for full context.)*
 
 The repo is live at `github.com/GameTech-Systems/holdem-plus` (private, MIT
 licensed) and has been verified **outside my own sandbox**, which matters —
@@ -51,6 +143,10 @@ the proxy so the redirect resolves to the public URL. Worth doing before
 handing this link to anyone external, since "the demo doesn't load unless
 you know to add a slash" is exactly the kind of friction that loses a
 casino contact's attention in the first ten seconds.
+
+> **Update (see Section -1 above): fixed.** The fix actually used was
+> simpler than "trust forwarded-host headers" — an explicit relative
+> redirect sidesteps host-detection entirely rather than depending on it.
 
 ### Bug 2 (diagnosed, not yet fixed): no hand-completion / winner summary shown
 
@@ -104,6 +200,13 @@ how this shipped unnoticed through 154 passing tests. Add
 that plays a hand to completion via the REST `/actions` endpoint and
 asserts the *response to that final action* (not the next poll) contains
 non-empty `payouts` and `is_complete: true` for the hand that just ended.
+
+> **Update (see Section -1 above): fixed.** Went with the persistent-field
+> approach (`last_hand`) rather than a one-off message, specifically
+> because it also satisfies "the response to that final action must carry
+> the result" without needing separate REST/WS-specific plumbing. Test
+> added as described, plus two more covering later polls and the WS
+> broadcast.
 
 ---
 
@@ -195,13 +298,19 @@ for v1" answer has no code implication.
   `api.py` are module-level dicts. Fine behind one `uvicorn` worker. **Not**
   safe with `--workers > 1` or a load balancer without replacing that
   storage.
-- **New, this session: the hand-completion sequencing bug (Bug 2 above)
-  is the clearest illustration yet of why "the engine is fully tested"
-  and "the product is fully tested" are different claims.** Every module
-  below `api.py` is correct; the bug is entirely in the order two lines
-  run in a request handler. Audit testing from here should specifically
-  look for more of this category — sequencing/ordering issues at the
-  API layer that unit tests of individual modules can't catch.
+- **`TableSession.last_hand_result` (new, this session) follows the same**
+  **single-process/in-memory constraint as everything else in `api.py`.**
+  It's just one more field on the same module-level dict-backed session
+  object — no new persistence story, no new scaling story. If/when
+  `TableSession` moves to a real store (Redis/DB), this field goes with it.
+- **The hand-completion sequencing bug (Bug 2, now fixed) is the clearest**
+  **illustration yet of why "the engine is fully tested" and "the product
+  is fully tested" are different claims.** Every module below `api.py` was
+  correct; the bug was entirely in the order two lines ran in a request
+  handler, and in nothing capturing complete_hand()'s return value. Audit
+  testing from here should specifically look for more of this category —
+  sequencing/ordering issues at the API layer that unit tests of
+  individual modules can't catch.
 
 ---
 
@@ -251,17 +360,14 @@ license specifically at that point rather than assuming MIT still fits.
 
 Updated priority order, given this session's findings:
 
-1. **Fix Bug 2 (hand-completion summary)** — highest priority. This is the
-   difference between "technically works" and "anyone can tell what just
-   happened." Write the missing test first (Section 0), then fix.
-2. **Fix Bug 1 (`/app` proxy redirect)** — low effort, meaningfully reduces
-   first-impression friction for anyone you send a link to.
+1. ~~**Fix Bug 2 (hand-completion summary)**~~ **Done — see Section -1.**
+2. ~~**Fix Bug 1 (`/app` proxy redirect)**~~ **Done — see Section -1.**
 3. **Do a real audit-testing pass**, not more unit tests: play many hands
    deliberately trying to break the sequencing (multi-way all-ins, rabbit
    hunts, folds at every street, rapid actions from two tabs at once) and
    watch for mismatches between engine state and what the UI shows, the
    way Bug 2 was found. Log anything that looks off even if you can't
-   immediately explain it.
+   immediately explain it. **This is now the top of the list.**
 4. **Deploy somewhere with a stable, non-Codespaces URL.** Codespaces was
    great for verification but isn't meant to be a durable public link —
    it's tied to being logged into your GitHub account and isn't designed
@@ -279,14 +385,19 @@ Updated priority order, given this session's findings:
 
 ## 7. If you're a fresh Claude session picking this up
 
-**Read Section 0 of this document first, in full** — it's the most
-current information and describes an open, diagnosed-but-unfixed bug that
-should be the first thing you work on.
+**Read Section -1, then Section 0, in full** — Section -1 is the most
+current information (both previously-open bugs are now fixed and tested);
+Section 0 is the diagnostic record of how they were found and is still
+useful background, especially for the audit-testing pass in Section 6.
 
 ### If you can connect GitHub directly (recommended)
 
 Point the connector at `GameTech-Systems/holdem-plus` and pull the whole
 repo — the file count stops being a cost once you're not copy-pasting.
+**Note:** the session that wrote Section -1 did *not* have GitHub access
+and worked from pasted file contents instead — if that's still true for
+you, the Section -1 fixes exist as verified diffs/file contents but may
+not yet be applied to the actual repo. Check before assuming they're live.
 
 ### If you can't connect GitHub and someone's pasting files in by hand
 
@@ -295,16 +406,19 @@ if a specific task needs it":
 
 1. **`HANDOFF.md`** (this file) — always first, always in full.
 2. **`README.md`** — run commands, one screen.
-3. **`api.py`** and **`static/index.html`** — Bug 2 lives entirely in the
-   interaction between these two files; nothing else is needed to fix it.
+3. **`api.py`**, **`test_api.py`**, and **`static/index.html`** — Bugs 1
+   and 2 lived entirely in the interaction between these files; nothing
+   else was needed to fix them, and nothing else should need touching for
+   closely-related follow-up work (e.g. the audit-testing pass).
 4. **`orchestrator.py`** — needed to understand what `Hand.result` /
-   `HandResult` actually contain, since that's the data Bug 2's fix needs
-   to route through correctly.
+   `HandResult` actually contain, since that's the data both the `"hand"`
+   and new `"last_hand"` fields in `api.py` route through.
 
 Everything else (`poker_types.py`, `hand_evaluator.py`,
 `betting_state_machine.py`, `side_pots.py`, `tournament_structure.py`,
-`tournament_balancing.py`, and all nine `test_*.py` files) is fully tested,
-stable, and not implicated in the currently-known open issue — only pull
-those in if a new task specifically touches that layer. Run `pytest -q`
-first thing regardless of how you got the files, to confirm the 154-passed
-baseline before changing anything.
+`tournament_balancing.py`, and all nine `test_*.py` files other than
+`test_api.py`) is fully tested, stable, and not implicated in either
+now-fixed issue — only pull those in if a new task specifically touches
+that layer. Run `pytest -q` first thing regardless of how you got the
+files, to confirm the **158**-passed baseline (154 original + 4 from this
+session) before changing anything.
