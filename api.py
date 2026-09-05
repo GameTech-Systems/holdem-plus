@@ -40,7 +40,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from betting_state_machine import ActionType, IllegalActionError
-from orchestrator import Hand, OrchestratorError, Tournament
+from orchestrator import Hand, HandResult, OrchestratorError, Tournament
 from tournament_structure import generate_default_schedule
 
 INTERNAL_TABLE_ID = "T1"  # Tournament's internal table id when max_table_size == seat count
@@ -70,6 +70,17 @@ class TableSession:
     status: str = "waiting"  # waiting | in_progress | complete
     tournament: Optional[Tournament] = None
     connections: Dict[WebSocket, Optional[str]] = field(default_factory=dict)
+    # The most recently finished hand at this table, kept around so a
+    # client can see what happened even after the next hand has already
+    # been dealt (see HANDOFF.md Bug 2 -- complete_hand() used to run,
+    # then _start_next_hand_if_needed() would immediately overwrite
+    # hands_by_table["T1"] with a new Hand before anything was ever sent
+    # to a client, so the finished hand's payouts/showdown were computed
+    # correctly but never actually reached anyone). Persisted here
+    # (rather than sent as a one-off message only) so it survives a
+    # missed broadcast, a fresh GET /state, or a WS reconnect a moment
+    # later, not just the exact instant the hand completed.
+    last_hand_result: Optional[HandResult] = None
 
 
 GUESTS: Dict[str, str] = {}          # player_id -> display_name
@@ -131,12 +142,35 @@ class RabbitHuntRequest(BaseModel):
 # State serialization -- redacts hole cards the viewer isn't allowed to see
 # ---------------------------------------------------------------------------
 
+def _serialize_hand_result(result: HandResult) -> dict:
+    """Serializes a *finished* hand's outcome for the 'last_hand' field --
+    same card-stringification convention as the live 'hand' payload
+    below, but there's no viewer-based redaction to do here: every card
+    in revealed_hands already went to showdown and is public, and a
+    folded player's hole cards were never added to revealed_hands in the
+    first place (see orchestrator.Hand._finalize)."""
+    return {
+        "is_complete": True,
+        "payouts": dict(result.payouts),
+        "community_cards": [str(c) for c in result.community_cards],
+        "revealed_hands": {
+            pid: [str(c) for c in cards] for pid, cards in result.revealed_hands.items()
+        },
+        "folded_players": list(result.folded_players),
+    }
+
+
 def _serialize_state(session: TableSession, viewer_player_id: Optional[str]) -> dict:
     payload: dict = {
         "table_id": session.table_id,
         "status": session.status,
         "max_seats": session.max_seats,
         "seated_players": list(session.player_ids),
+        "last_hand": (
+            _serialize_hand_result(session.last_hand_result)
+            if session.last_hand_result is not None
+            else None
+        ),
     }
 
     t = session.tournament
@@ -278,7 +312,10 @@ async def apply_action(table_id: str, payload: ActionRequest) -> dict:
 
     if hand.is_complete:
         assert session.tournament is not None
-        session.tournament.complete_hand(INTERNAL_TABLE_ID)
+        # Capture the finished hand's result BEFORE starting the next
+        # hand, which immediately overwrites hands_by_table["T1"] --
+        # see the last_hand_result field comment on TableSession.
+        session.last_hand_result = session.tournament.complete_hand(INTERNAL_TABLE_ID)
         _start_next_hand_if_needed(session)
 
     await _broadcast_state(session)
@@ -342,7 +379,7 @@ async def _handle_ws_message(session: TableSession, player_id: Optional[str], ms
             hand.apply_action(player_id, action_type, amount)
             if hand.is_complete:
                 assert session.tournament is not None
-                session.tournament.complete_hand(INTERNAL_TABLE_ID)
+                session.last_hand_result = session.tournament.complete_hand(INTERNAL_TABLE_ID)
                 _start_next_hand_if_needed(session)
         elif msg_type == "rabbit_hunt":
             if player_id is None:
@@ -389,7 +426,32 @@ async def _send_to_player(session: TableSession, player_id: Optional[str], messa
 
 from pathlib import Path
 
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
+
+
+@app.get("/app", include_in_schema=False)
+async def _redirect_app_to_index() -> RedirectResponse:
+    """
+    Explicit, relative redirect for the no-trailing-slash form of the
+    demo client's URL (see HANDOFF.md Bug 1).
+
+    Without this route, Starlette's StaticFiles mount handles the
+    trailing-slash redirect itself, and builds that redirect from the
+    server's own view of its scheme/host. Behind a reverse proxy that
+    doesn't forward the original Host (e.g. Codespaces' port-forwarding
+    proxy), that resolves to `localhost`, and the browser -- correctly,
+    since it isn't inside the container -- refuses to follow it.
+
+    Registering this route ahead of the mount below makes it take
+    priority for the exact "/app" path. Returning a path-only Location
+    header ("/app/", no scheme or host) sidesteps the host-detection
+    problem entirely: the browser resolves a relative redirect against
+    whatever origin it's actually talking to, regardless of what the
+    server behind the proxy thinks its own address is.
+    """
+    return RedirectResponse(url="/app/")
+
 
 _static_dir = Path(__file__).parent / "static"
 if _static_dir.is_dir():
