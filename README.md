@@ -74,7 +74,7 @@ curl -s -X POST localhost:8000/tables/<table_id>/actions \
 Or connect a WebSocket to `ws://localhost:8000/ws/tables/<table_id>?player_id=<id>`
 for live push updates instead of polling `/state`.
 
-## Known scope limits (see HANDOFF.md for the full list)
+## Known scope limits
 
 This is a single-process, in-memory, single-table-per-game demo backend.
 No database, no auth beyond an opaque guest id, no frontend. It's built
