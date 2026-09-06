@@ -46,14 +46,6 @@ A precise, unambiguous rules document is the actual deliverable of phase 0 — e
 
 This front-loaded dealing sequence is the detail that most directly motivates the Dealer Assist screen: it decouples "dealing" from "revealing," so the screen needs to track *what's already been dealt face-down vs. what's been turned* per hand, which is exactly the kind of state a human dealer can lose track of under pressure but a screen can't.
 
-**Open rules questions to resolve before coding (flag these back to the game designer):**
-
-* Does the 3rd hole card change starting hand equity enough to require different opening-range guidance, and should the demo educate players on this (tooltips, trainer mode)? I don’t believe the 3rd hole card changes starting hand equity. For v1 let’s assume little to no guidance, and a trainer mode can be in a v2.   
-* Any max-hand-cap or hand-reveal rule differences from standard Hold'em (e.g., does anything change for stud-like exposure)? Answer: no, hole cards stay hidden until showdown — confirm this stays true. Confirmed, no caps or hand rule differences.  
-* Rabbit Runner add-on (Section 2a below) — is it in-scope for the v1 demo or a v2 feature? Let’s add it to v1 demo, as it’s a feature worth showcasing from the start.
-
-**2a. Rabbit Runner Option (secondary feature, likely v2)** If the hand ends by folding after 4th street, any player who folded may pay one small blind (routed to a dealer-tip pool in live play) to see the would-have-been river. This is a monetizable, dealer-incentive feature for live casino play; in the fake-money demo it can be simulated for free or with play-chips to gather player-interest data, but the *tip-pool economics* are a live-casino-only concept and shouldn't be modeled as revenue in the demo phase.
-
 ---
 
 ## **3\. Phase 1 — Fake-Money Web Demo**
