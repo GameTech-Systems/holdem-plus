@@ -61,7 +61,7 @@ representing the project in public spaces.
 Instances of abusive, harassing, or otherwise unacceptable behavior may
 be reported to the project maintainers at:
 
-**[JamesTinghitella@gmail.com]**
+**[TheManWithMansVoice@gmail.com]**
 
 All complaints will be reviewed and investigated promptly and fairly.
 All maintainers are obligated to respect the privacy and security of
