@@ -5,6 +5,8 @@ demo that online poker rooms and casinos can try and evaluate. See
 `Hold_em_Plus___Technology_Development_Plan.md` for the full product plan
 and `HANDOFF.md` for exactly where this stands and what's next.
 
+https://holdem-plus-demo.onrender.com/app/
+
 ## What's here
 
 ```
