@@ -458,6 +458,31 @@ function renderLastHandBanner(lastHand) {
   banner.innerHTML = `Last hand: <span class="winners">${winners || "no payout"}</span>`
     + (lastHand.community_cards && lastHand.community_cards.length
         ? ` — board: ${lastHand.community_cards.join(" ")}` : "");
+
+  // Rabbit hunt lives here now, not in the live action bar: by the time
+  // a hand is ever complete, the next hand has already been dealt (the
+  // server does this synchronously), so the *live* hand the action bar
+  // reflects is never the one you'd be rabbit-hunting on. last_hand's
+  // own rabbit_hunt_eligible is scoped to whoever is asking (this
+  // viewer) and to specifically this most-recently-finished hand.
+  if (lastHand.rabbit_hunt_eligible) {
+    const btn = document.createElement("button");
+    btn.className = "secondary";
+    btn.textContent = "Rabbit hunt";
+    btn.style.marginLeft = "0.6rem";
+    btn.onclick = async () => {
+      try {
+        const result = await api(`/tables/${tableId}/rabbit-hunt`, {
+          method: "POST",
+          body: JSON.stringify({ player_id: playerId }),
+        });
+        log(`Rabbit hunt: the river would have been ${result.river.join(", ")} (cost ${result.cost})`);
+        pollState();
+      } catch (e) { log("Error: " + e.message); }
+    };
+    banner.appendChild(btn);
+  }
+
   banner.classList.add("visible");
 
   if (key !== lastShownHandKey) {
@@ -527,25 +552,14 @@ function renderActions(hand) {
   el.innerHTML = "";
   const hint = document.getElementById("turn-hint");
 
+  // Note: `hand` here is always the live/current hand. It is never seen
+  // with is_complete true by the time a client observes it -- the server
+  // deals the next hand synchronously the instant one finishes -- so
+  // there is deliberately no "hand just ended" branch here any more.
+  // That moment is covered by the last-hand banner (renderLastHandBanner)
+  // instead, including the rabbit-hunt button.
   if (hand.is_complete) {
-    hint.textContent = hand.rabbit_hunt_eligible
-      ? "You folded on the turn or river — you can pay a small blind to see the river you'd have faced."
-      : "Waiting for the next hand to be dealt...";
-    if (hand.rabbit_hunt_eligible) {
-      const btn = document.createElement("button");
-      btn.className = "secondary";
-      btn.textContent = "Rabbit hunt";
-      btn.onclick = async () => {
-        try {
-          const result = await api(`/tables/${tableId}/rabbit-hunt`, {
-            method: "POST",
-            body: JSON.stringify({ player_id: playerId }),
-          });
-          log(`Rabbit hunt: the river would have been ${result.river.join(", ")} (cost ${result.cost})`);
-        } catch (e) { log("Error: " + e.message); }
-      };
-      el.appendChild(btn);
-    }
+    hint.textContent = "Waiting for the next hand to be dealt...";
     return;
   }
 
