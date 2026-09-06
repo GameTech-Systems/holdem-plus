@@ -66,3 +66,4 @@ mechanisms, not one license doing both jobs.
 
 Questions about commercial or branded use should be directed to the
 Rights Holder before launch, rather than assumed from this file alone.
+https://sites.google.com/view/gametechsystems/home
