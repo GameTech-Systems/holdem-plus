@@ -31,6 +31,8 @@ Run locally with:  uvicorn api:app --reload
 
 from __future__ import annotations
 
+import random
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
@@ -39,6 +41,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from analytics import AnalyticsLog, build_hand_record, simulate_standard_holdem_baseline
 from betting_state_machine import ActionType, IllegalActionError
 from orchestrator import Hand, HandResult, OrchestratorError, Tournament
 from tournament_structure import generate_default_schedule
@@ -96,10 +99,36 @@ class TableSession:
     # completes, this reference moves on and the previous rabbit-hunt
     # window is gone, matching how last_hand_result already behaves.
     last_completed_hand: Optional[Hand] = None
+    # Wall-clock time.time() the table was started, used to keep the
+    # Tournament's blind clock in sync with real elapsed time -- see
+    # _sync_tournament_clock() below and HANDOFF.md's "blind clock never
+    # advances" finding. None until /start actually runs.
+    started_at: Optional[float] = None
+    # Per-table instrumentation log (hands/hour, pot-vs-blinds, showdown
+    # frequency, hand-strength distribution, player-reported excitement)
+    # -- see analytics.py. Populated one HandRecord at a time, right
+    # after each hand completes, from both the REST action handler and
+    # the WebSocket handler (the two places a hand can finish).
+    analytics: AnalyticsLog = field(default_factory=AnalyticsLog)
 
 
 GUESTS: Dict[str, str] = {}          # player_id -> display_name
 TABLES: Dict[str, TableSession] = {}  # table_id -> TableSession
+
+# Cached once per process: an empirical standard-Hold'em (best-5-of-7)
+# hand-category baseline, computed via this same codebase's evaluator
+# (see analytics.simulate_standard_holdem_baseline). Seeded for
+# reproducibility across requests within a process; recomputing per
+# request would be wasteful (a few thousand hand evaluations) for a
+# number that doesn't depend on any table's actual play.
+_BASELINE_CACHE: Optional[Dict[str, float]] = None
+
+
+def _standard_holdem_baseline() -> Dict[str, float]:
+    global _BASELINE_CACHE
+    if _BASELINE_CACHE is None:
+        _BASELINE_CACHE = simulate_standard_holdem_baseline(5000, rng=random.Random(0))
+    return _BASELINE_CACHE
 
 
 def _get_table(table_id: str) -> TableSession:
@@ -115,6 +144,40 @@ def _current_hand(session: TableSession) -> Optional[Hand]:
     return session.tournament.hands_by_table.get(INTERNAL_TABLE_ID)
 
 
+def _sync_tournament_clock(session: TableSession) -> None:
+    """
+    Advances the tournament's blind clock to match real elapsed
+    wall-clock time since the table started.
+
+    `Tournament.elapsed_seconds` (and therefore which BlindLevel a new
+    hand deals at) only moves when something calls `advance_clock()` --
+    by design, so it's trivial to unit-test and to drive from a
+    fast-forwarded simulation instead of a live clock (see
+    `tournament_structure.BlindClock`'s own docstring, and
+    `example_usage.py`, which does exactly that for its offline demo).
+    This API is supposed to be that "live clock" caller for the actual
+    running service -- but until this fix, nothing in api.py ever called
+    `advance_clock()` at all. That meant every table run through this
+    API sat at blind level 1 (1/2) forever, no matter how long it had
+    been running or how many hands were played -- the entire escalating-
+    blind mechanic the tournament format depends on was silently inert
+    in the live demo. See HANDOFF.md for how this was found (every
+    module involved -- BlindClock, Tournament.advance_clock -- already
+    had passing unit tests; the gap was that nothing in this file
+    called the method, not that the method itself was wrong).
+
+    Catching the tournament's clock up to real time right before a new
+    hand is dealt (the only moment `elapsed_seconds` is actually read)
+    fixes that without needing a background task or thread.
+    """
+    if session.tournament is None or session.started_at is None:
+        return
+    real_elapsed = int(time.time() - session.started_at)
+    delta = real_elapsed - session.tournament.elapsed_seconds
+    if delta > 0:
+        session.tournament.advance_clock(delta)
+
+
 def _start_next_hand_if_needed(session: TableSession) -> None:
     t = session.tournament
     assert t is not None
@@ -123,7 +186,28 @@ def _start_next_hand_if_needed(session: TableSession) -> None:
         return
     if INTERNAL_TABLE_ID in t.hands_by_table:
         return  # a hand is already in progress
+    _sync_tournament_clock(session)
     t.start_hand(INTERNAL_TABLE_ID)
+
+
+def _record_analytics_for_completed_hand(session: TableSession, hand: Hand, result: HandResult) -> None:
+    """
+    Builds and stores a HandRecord for a just-completed hand -- called
+    from both the REST action handler and the WebSocket handler (the
+    two places a hand can actually finish), right after
+    `Tournament.complete_hand()` returns and while `hand` (small_blind/
+    big_blind/seat count) and `session.tournament.elapsed_seconds` are
+    both still on hand. See analytics.py for what this feeds into.
+    """
+    assert session.tournament is not None
+    record = build_hand_record(
+        result,
+        small_blind=hand.small_blind,
+        big_blind=hand.big_blind,
+        elapsed_seconds=session.tournament.elapsed_seconds,
+        num_dealt_in=len(hand.player_states),
+    )
+    session.analytics.record_hand(record)
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +235,11 @@ class ActionRequest(BaseModel):
 
 class RabbitHuntRequest(BaseModel):
     player_id: str
+
+
+class FeedbackRequest(BaseModel):
+    player_id: str
+    thumbs_up: bool
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +399,7 @@ def start_table(table_id: str) -> dict:
         max_table_size=session.max_seats,
         blind_schedule=generate_default_schedule(),
     )
+    session.started_at = time.time()
     session.status = "in_progress"
     _start_next_hand_if_needed(session)
     return {"table_id": table_id, "status": session.status}
@@ -348,6 +438,7 @@ async def apply_action(table_id: str, payload: ActionRequest) -> dict:
         # /rabbit-hunt unreachable before (HANDOFF.md Bug 3).
         session.last_hand_result = session.tournament.complete_hand(INTERNAL_TABLE_ID)
         session.last_completed_hand = hand
+        _record_analytics_for_completed_hand(session, hand, session.last_hand_result)
         _start_next_hand_if_needed(session)
 
     await _broadcast_state(session)
@@ -385,6 +476,39 @@ async def rabbit_hunt(table_id: str, payload: RabbitHuntRequest) -> dict:
 
     await _broadcast_state(session)
     return {"river": [str(c) for c in river], "cost": hand.rabbit_hunts[payload.player_id]}
+
+
+@app.get("/tables/{table_id}/analytics")
+def get_analytics(table_id: str) -> dict:
+    """
+    Read-only instrumentation summary for this table -- see
+    analytics.py's module docstring for what each field means and why
+    it's the specific set of numbers the tech plan's hypothesis-testing
+    calls for. `standard_holdem_baseline` is a process-wide (not
+    per-table) empirical reference distribution for comparison, cached
+    lazily on first call to any table's analytics endpoint.
+    """
+    session = _get_table(table_id)
+    summary = session.analytics.summary()
+    summary["standard_holdem_baseline"] = _standard_holdem_baseline()
+    return summary
+
+
+@app.post("/tables/{table_id}/feedback")
+def submit_feedback(table_id: str, payload: FeedbackRequest) -> dict:
+    """
+    Records a lightweight player-reported excitement signal (thumbs
+    up/down) for this table -- the "simple player-reported excitement"
+    bullet from the tech plan's instrumentation list. Deliberately not
+    tied to a specific hand: a person forms an opinion about the table
+    over a session, not necessarily about the exact hand that just
+    finished, so this is a per-table tally rather than a per-hand one.
+    """
+    session = _get_table(table_id)
+    if payload.player_id not in GUESTS:
+        raise HTTPException(404, "Unknown player_id -- create a guest session first via POST /guest")
+    session.analytics.record_feedback(payload.thumbs_up)
+    return {"thumbs_up": session.analytics.thumbs_up, "thumbs_down": session.analytics.thumbs_down}
 
 
 # ---------------------------------------------------------------------------
@@ -430,6 +554,7 @@ async def _handle_ws_message(session: TableSession, player_id: Optional[str], ms
                 assert session.tournament is not None
                 session.last_hand_result = session.tournament.complete_hand(INTERNAL_TABLE_ID)
                 session.last_completed_hand = hand
+                _record_analytics_for_completed_hand(session, hand, session.last_hand_result)
                 _start_next_hand_if_needed(session)
         elif msg_type == "rabbit_hunt":
             if player_id is None:

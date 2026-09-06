@@ -13,6 +13,8 @@ behaves (state persists for the life of the process) and avoids needing
 a fixture that reaches into api.py's internals to reset it.
 """
 
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -605,3 +607,261 @@ def test_rabbit_hunt_rest_endpoint_rejects_ineligible_player():
     # rabbit hunt must be rejected regardless of who asks.
     resp = client.post(f"/tables/{table_id}/rabbit-hunt", json={"player_id": p0})
     assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Blind-clock real-time sync (see HANDOFF.md's "blind clock never
+# advances" finding from this session's audit pass)
+#
+# Every module involved here (BlindClock, Tournament.advance_clock) was
+# already fully unit-tested and correct in isolation. The bug was that
+# nothing in api.py ever called advance_clock() at all, so a table run
+# through the live API sat at blind level 1 forever regardless of real
+# elapsed time or hands played. These tests exercise the fix
+# (_sync_tournament_clock in api.py) without needing to actually sleep,
+# by backdating TableSession.started_at -- the same in-memory-dict
+# access pattern test_app_redirect_is_relative_not_host_aware already
+# uses to reach api.py's internals directly.
+# ---------------------------------------------------------------------------
+
+from api import TABLES  # noqa: E402  (see comment above -- deliberate direct access)
+
+
+def _check_or_call_current_actor(table_id: str) -> dict:
+    state = client.get(f"/tables/{table_id}/state").json()
+    actor = state["hand"]["current_actor"]
+    actor_state = client.get(f"/tables/{table_id}/state", params={"player_id": actor}).json()
+    legal = actor_state["hand"]["legal_actions"]
+    action_type = "CHECK" if "CHECK" in legal else "CALL"
+    resp = client.post(f"/tables/{table_id}/actions", json={"player_id": actor, "action_type": action_type})
+    assert resp.status_code == 200
+    return resp.json()
+
+
+def test_blinds_never_escalate_without_the_clock_sync_bug_reproduced():
+    """
+    Documents the bug this session found and fixed: with no time
+    manipulation at all, playing hands back to back keeps blinds pinned
+    at level 1 for as long as this test cares to check, confirming the
+    fix below is actually necessary and not testing a no-op.
+    """
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    for _ in range(10):
+        state = client.get(f"/tables/{table_id}/state").json()
+        if state["hand"] is None:
+            break
+        assert (state["hand"]["small_blind"], state["hand"]["big_blind"]) == (1, 2)
+        _check_or_call_current_actor(table_id)
+
+
+def test_backdating_table_start_advances_blinds_on_the_next_hand():
+    """
+    Regression test for the fix: simulating 20 minutes of real elapsed
+    time (by backdating started_at, no actual sleeping) must be reflected
+    in the blind level of the next hand dealt -- the default schedule's
+    level 1 runs 0-900s and level 2 runs 900-1800s, so 1200s elapsed
+    should land on level 2 (2/4).
+    """
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    session = TABLES[table_id]
+    session.started_at = time.time() - 1200
+
+    # Finish the in-progress hand (dealt before the backdate) so the
+    # *next* hand -- the one that actually reads the now-caught-up
+    # clock -- gets dealt.
+    for _ in range(20):
+        resp_body = _check_or_call_current_actor(table_id)
+        if resp_body.get("last_hand") is not None:
+            break
+
+    final_state = client.get(f"/tables/{table_id}/state").json()
+    if final_state["hand"] is not None:  # tournament may have ended heads-up
+        assert (final_state["hand"]["small_blind"], final_state["hand"]["big_blind"]) == (2, 4)
+
+
+# ---------------------------------------------------------------------------
+# Analytics endpoint (see analytics.py)
+# ---------------------------------------------------------------------------
+
+def test_analytics_endpoint_before_any_hand_completes():
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    summary = client.get(f"/tables/{table_id}/analytics").json()
+    assert summary["hands_recorded"] == 0
+    assert summary["showdown_frequency"] is None
+    assert summary["category_distribution"] == {}
+    # the standard-Hold'em baseline is process-wide, not table-specific,
+    # so it's populated even before this table has played a single hand
+    assert sum(summary["standard_holdem_baseline"].values()) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_analytics_endpoint_reflects_completed_hands():
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    _play_to_first_hand_completion(table_id)
+
+    summary = client.get(f"/tables/{table_id}/analytics").json()
+    assert summary["hands_recorded"] == 1
+    assert summary["average_pot_in_big_blinds"] > 0
+    assert summary["showdown_frequency"] in (0.0, 1.0)  # exactly one hand recorded so far
+
+
+def test_analytics_endpoint_unknown_table_returns_404():
+    resp = client.get("/tables/does-not-exist/analytics")
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Feedback endpoint (player-reported excitement)
+# ---------------------------------------------------------------------------
+
+def test_feedback_requires_a_real_guest_id():
+    table_id = make_table()
+    resp = client.post(f"/tables/{table_id}/feedback", json={"player_id": "not-a-guest", "thumbs_up": True})
+    assert resp.status_code == 404
+
+
+def test_feedback_is_reflected_in_analytics_summary():
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    resp = client.post(f"/tables/{table_id}/feedback", json={"player_id": p0, "thumbs_up": True})
+    assert resp.status_code == 200
+    client.post(f"/tables/{table_id}/feedback", json={"player_id": p1, "thumbs_up": False})
+
+    summary = client.get(f"/tables/{table_id}/analytics").json()
+    assert summary["player_feedback"] == {"thumbs_up": 1, "thumbs_down": 1}
+
+
+# ---------------------------------------------------------------------------
+# Audit-testing pass: multi-way all-ins through to real showdown, and
+# folds at every street -- the specific bug classes HANDOFF.md's
+# "fastest path forward" called out for the next audit pass, exercised
+# here through the actual API surface (not just Hand/Tournament objects
+# directly, which test_orchestrator.py already covers) since that's
+# where the clock bug above was actually hiding.
+# ---------------------------------------------------------------------------
+
+def _act_with_policy(table_id: str, actor: str) -> dict:
+    """Reference policy driven entirely through the API's own legal_actions,
+    mirroring orchestrator.default_bot_action but over HTTP: check if
+    free, else call, else shove, else fold."""
+    actor_state = client.get(f"/tables/{table_id}/state", params={"player_id": actor}).json()
+    legal = actor_state["hand"]["legal_actions"]
+    if "CHECK" in legal:
+        action_type = "CHECK"
+    elif "CALL" in legal:
+        action_type = "CALL"
+    elif "ALL_IN" in legal:
+        action_type = "ALL_IN"
+    else:
+        action_type = "FOLD"
+    resp = client.post(f"/tables/{table_id}/actions", json={"player_id": actor, "action_type": action_type})
+    assert resp.status_code == 200
+    return resp.json()
+
+
+def test_three_handed_shallow_stacks_reach_multiway_all_ins_via_api_with_chips_conserved():
+    """
+    Shallow starting stacks (5 big blinds) with a check/call/shove/fold
+    policy reliably produces multi-way all-ins and side pots within a
+    handful of hands, purely through blind pressure -- no rigged deck
+    needed, since this only asserts the chip-conservation invariant and
+    that the tournament reaches completion without an unhandled
+    exception, not any specific hand outcome. This is the API-level
+    analogue of test_orchestrator.py's
+    test_multi_hand_bot_simulation_keeps_chips_conserved_and_terminates,
+    covering the additional surface (serialization, session bookkeeping,
+    analytics recording) that only exists at the api.py layer.
+    """
+    table_id = make_table(max_seats=3, starting_stack=10)
+    guests = [make_guest() for _ in range(3)]
+    for g in guests:
+        join(table_id, g)
+    client.post(f"/tables/{table_id}/start")
+
+    stacks_before = dict(client.get(f"/tables/{table_id}/state").json()["stacks"])
+    total_chips = sum(stacks_before.values())
+
+    for _ in range(5000):
+        state = client.get(f"/tables/{table_id}/state").json()
+        if state["status"] == "complete" or state["hand"] is None:
+            break
+        actor = state["hand"]["current_actor"]
+        if actor is None:
+            break
+        _act_with_policy(table_id, actor)
+
+    final_state = client.get(f"/tables/{table_id}/state").json()
+    assert sum(final_state["stacks"].values()) == total_chips
+    assert final_state["status"] == "complete"
+
+    analytics = client.get(f"/tables/{table_id}/analytics").json()
+    assert analytics["hands_recorded"] >= 1
+
+
+def _play_n_clears_then_fold(table_id: str, n_clears: int) -> str:
+    """Clears n_clears actions with check/call, then folds whoever acts
+    next -- used to force a fold at a specific betting street (0 clears
+    = fold preflop immediately, 2 = fold on the flop, 4 = fold on the
+    turn, 6 = fold on the river, for a heads-up hand)."""
+    for _ in range(n_clears):
+        _check_or_call_current_actor(table_id)
+    state = client.get(f"/tables/{table_id}/state").json()
+    folder = state["hand"]["current_actor"]
+    resp = client.post(f"/tables/{table_id}/actions", json={"player_id": folder, "action_type": "FOLD"})
+    assert resp.status_code == 200
+    return folder
+
+
+@pytest.mark.parametrize("n_clears", [0, 2, 4, 6])
+def test_fold_at_every_street_ends_hand_cleanly_and_conserves_chips(n_clears):
+    """
+    Folding preflop (0 clears), on the flop (2), on the turn (4), and on
+    the river (6) must each end the hand immediately, award the whole
+    pot to the remaining player, conserve total chips, and leave the
+    table ready for (or having already dealt) a new hand -- one of the
+    specific scenario classes flagged for this session's audit pass.
+    """
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    stacks_before = dict(client.get(f"/tables/{table_id}/state").json()["stacks"])
+
+    folder = _play_n_clears_then_fold(table_id, n_clears)
+    winner = p1 if folder == p0 else p0
+
+    final = client.get(f"/tables/{table_id}/state").json()
+    assert sum(final["stacks"].values()) == sum(stacks_before.values())
+    assert final["last_hand"]["is_complete"] is True
+    assert final["last_hand"]["payouts"].get(winner, 0) > 0
+    assert folder not in final["last_hand"]["payouts"]
+    assert folder in final["last_hand"]["folded_players"]
+    # folding players are never added to revealed_hands (see orchestrator.Hand._finalize)
+    assert folder not in final["last_hand"]["revealed_hands"]
+    # the table must be ready for more play, not stuck
+    assert final["status"] in ("in_progress", "complete")

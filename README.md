@@ -19,9 +19,11 @@ tournament_structure.py     blind schedule/clock + payout structures
 tournament_balancing.py     multi-table seating, elimination, breaking
 orchestrator.py             Hand + Tournament -- wires all of the above
                              behind two classes, plus Rabbit Runner
+analytics.py                hands/hour, pot-vs-blinds, showdown frequency,
+                             hand-strength distribution, player feedback
 api.py                      REST + WebSocket layer over the orchestrator
 example_usage.py            runnable script showing the orchestrator API
-test_*.py                   163 tests, pytest
+test_*.py                   188 tests, pytest
 requirements.txt            fastapi / uvicorn / pydantic / pytest / httpx
 Dockerfile, .dockerignore   container image (Fly.io / Railway / Render-Docker)
 render.yaml                 Render Blueprint (native Python runtime)
@@ -31,14 +33,17 @@ DEPLOYMENT.md                step-by-step deploy instructions for all three
 ```
 
 Every module above the API layer is dependency-free standard-library
-Python. All 163 tests pass as of this handoff (154 original + 9 added
-while fixing the four bugs described in `HANDOFF.md`).
+Python. All 188 tests pass as of this handoff (163 prior + 25 added this
+session -- see `HANDOFF.md` for what's new: an analytics/instrumentation
+layer per the tech plan's Section 3.3, a fix for a real-time blind-clock
+bug found during this session's audit pass, and additional audit-testing
+coverage for multi-way all-ins and folds at every street).
 
 ## Running it
 
 ```bash
 pip install -r requirements.txt
-pytest -q                        # 163 passed
+pytest -q                        # 188 passed
 python3 example_usage.py         # orchestrator demo, no network
 uvicorn api:app --reload         # real server on http://127.0.0.1:8000
 ```
@@ -73,6 +78,17 @@ curl -s -X POST localhost:8000/tables/<table_id>/actions \
 
 Or connect a WebSocket to `ws://localhost:8000/ws/tables/<table_id>?player_id=<id>`
 for live push updates instead of polling `/state`.
+
+## Analytics / instrumentation
+
+`GET /tables/<table_id>/analytics` returns hands/hour, average pot size
+in big blinds, showdown frequency, the hand-category distribution among
+revealed showdown hands, and a same-evaluator empirical baseline for
+*standard* Hold'em to compare against -- this is the data the tech
+plan's Section 3.3 hypothesis-testing actually depends on (see
+`analytics.py` and `HANDOFF.md`). `POST /tables/<table_id>/feedback`
+with `{"player_id": "...", "thumbs_up": true}` records the lightweight
+player-reported-excitement signal from the same section.
 
 ## Known scope limits
 
