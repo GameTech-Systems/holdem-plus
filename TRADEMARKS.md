@@ -66,4 +66,6 @@ mechanisms, not one license doing both jobs.
 
 Questions about commercial or branded use should be directed to the
 Rights Holder before launch, rather than assumed from this file alone.
+
+The Hold'em Plus Poker Variant was first presented by James Tinghitella here:
 https://sites.google.com/view/gametechsystems/home
