@@ -195,6 +195,68 @@
   }
   #last-hand-banner.visible { display: block; }
   #last-hand-banner .winners { color: var(--win); font-weight: 700; }
+
+  #demo-teaser { border-color: var(--accent); }
+  #demo-teaser h2 { color: var(--text); }
+  #demo-teaser p { color: var(--muted); margin: 0 0 0.9rem; max-width: 60ch; }
+
+  #demo-panel .demo-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  #demo-panel .demo-head h2 { margin: 0; }
+  #demo-panel .demo-summary { color: var(--muted); margin: 0.2rem 0 1rem; }
+
+  .demo-seats {
+    display: flex;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    margin: 0.8rem 0 1rem;
+  }
+  .demo-seat {
+    background: #10131A;
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 0.55rem 0.75rem;
+    min-width: 128px;
+    font-size: 0.8rem;
+    transition: box-shadow 0.2s ease, opacity 0.2s ease;
+  }
+  .demo-seat.acting { box-shadow: 0 0 0 2px var(--accent); }
+  .demo-seat.folded { opacity: 0.4; }
+  .demo-seat .name { font-weight: 600; margin-bottom: 0.15rem; }
+  .demo-seat .stack { color: var(--muted); }
+  .demo-seat .cards { display: flex; gap: 0.2rem; margin-top: 0.35rem; }
+  .demo-seat .cards .card { width: 1.7rem; height: 2.35rem; font-size: 0.72rem; }
+
+  .demo-log {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    max-height: 260px;
+    overflow-y: auto;
+    padding-right: 0.3rem;
+  }
+  .demo-line {
+    font-size: 0.87rem;
+    padding: 0.4rem 0.6rem;
+    border-left: 2px solid var(--panel-border);
+    color: var(--text);
+    opacity: 0;
+    animation: demo-line-in 0.25s ease forwards;
+  }
+  .demo-line.highlight {
+    border-left-color: var(--accent);
+    background: rgba(201, 162, 39, 0.08);
+    font-weight: 600;
+  }
+  @keyframes demo-line-in { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
+
+  .demo-controls { display: flex; gap: 0.6rem; margin-top: 1rem; flex-wrap: wrap; }
+  .demo-done { color: var(--muted); margin-top: 0.8rem; }
 </style>
 </head>
 <body>
@@ -206,6 +268,28 @@
 </header>
 
 <main>
+  <section class="panel" id="demo-teaser">
+    <h2>New here?</h2>
+    <p>Watch two hands play out on their own: one shows what the 3rd hole card
+       actually does to a hand, the other shows the Rabbit Runner option —
+       paying to see the river you'd have faced after folding.</p>
+    <button class="secondary" id="btn-watch-demo">▶ Watch the demo</button>
+  </section>
+
+  <section class="panel" id="demo-panel" style="display:none;">
+    <div class="demo-head">
+      <h2 id="demo-hand-title">Demo</h2>
+      <button class="secondary" id="btn-exit-demo">Exit demo</button>
+    </div>
+    <p class="demo-summary" id="demo-hand-summary"></p>
+    <div class="community-cards" id="demo-community"></div>
+    <div class="demo-seats" id="demo-seats"></div>
+    <div class="demo-log" id="demo-log"></div>
+    <div class="demo-controls">
+      <button class="secondary" id="btn-skip-demo-hand">Skip ahead</button>
+    </div>
+  </section>
+
   <section class="panel" id="setup-panel">
     <h2>Get seated</h2>
     <div class="row">
@@ -290,6 +374,120 @@ async function api(path, opts = {}) {
   return body;
 }
 
+// ---------- Demo mode ----------
+// Plays GET /demo/script (two fixed, deterministic hands -- see
+// demo_showcase.py) back as a timed animation. Nothing here creates a
+// guest, a table, or touches the real game state at all; it's read-only
+// against one endpoint. renderCard()/suitInfo() below are the same
+// helpers the real table view uses, so demo cards look identical to
+// real ones.
+let demoScript = null;
+let demoAbortToken = 0;
+let demoSkipCurrentHand = false;
+
+document.getElementById("btn-watch-demo").onclick = async () => {
+  const myToken = ++demoAbortToken;
+  try {
+    document.getElementById("setup-panel").style.display = "none";
+    document.getElementById("demo-teaser").style.display = "none";
+    document.getElementById("demo-panel").style.display = "block";
+    if (!demoScript) {
+      const data = await api("/demo/script");
+      demoScript = data.hands;
+    }
+    await playDemoScript(myToken);
+  } catch (e) {
+    log("Could not load the demo: " + e.message);
+  }
+};
+
+document.getElementById("btn-exit-demo").onclick = () => {
+  demoAbortToken++; // invalidates any in-flight playDemoScript loop
+  document.getElementById("demo-panel").style.display = "none";
+  document.getElementById("setup-panel").style.display = "block";
+  document.getElementById("demo-teaser").style.display = "block";
+};
+
+document.getElementById("btn-skip-demo-hand").onclick = () => {
+  demoSkipCurrentHand = true;
+};
+
+function demoSleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function playDemoScript(token) {
+  const logEl = document.getElementById("demo-log");
+  for (const hand of demoScript) {
+    if (token !== demoAbortToken) return;
+    demoSkipCurrentHand = false;
+    logEl.innerHTML = "";
+    document.getElementById("demo-hand-title").textContent = hand.title;
+    document.getElementById("demo-hand-summary").textContent = hand.summary;
+
+    for (const event of hand.events) {
+      if (token !== demoAbortToken) return;
+      renderDemoEvent(event);
+      if (demoSkipCurrentHand) continue;
+      await demoSleep(event.highlight ? 2400 : 1350);
+    }
+    if (token !== demoAbortToken) return;
+    await demoSleep(1800);
+  }
+  if (token !== demoAbortToken) return;
+  const done = document.createElement("p");
+  done.className = "demo-done";
+  done.textContent = "That's the demo -- pull up a seat below to play a real hand.";
+  logEl.appendChild(done);
+}
+
+function renderDemoEvent(event) {
+  const communityEl = document.getElementById("demo-community");
+  communityEl.innerHTML = "";
+  (event.community_cards || []).forEach((c) => communityEl.appendChild(renderCard(c)));
+  if (event.revealed_card) {
+    // Rabbit Runner's peeked river: visually distinct from the real board
+    // (dashed outline, dimmed) so it never reads as a 5th board card.
+    const ghost = renderCard(event.revealed_card);
+    ghost.style.opacity = "0.75";
+    ghost.style.outline = "2px dashed var(--accent)";
+    communityEl.appendChild(ghost);
+  }
+
+  const seatsEl = document.getElementById("demo-seats");
+  seatsEl.innerHTML = "";
+  (event.players || []).forEach((p) => {
+    const box = document.createElement("div");
+    box.className = "demo-seat"
+      + (p.folded ? " folded" : "")
+      + (p.player_id === event.actor ? " acting" : "");
+
+    const name = document.createElement("div");
+    name.className = "name";
+    name.textContent = p.player_id + (p.all_in ? " (all-in)" : "");
+    box.appendChild(name);
+
+    const stack = document.createElement("div");
+    stack.className = "stack";
+    stack.textContent = "Stack: " + p.stack;
+    box.appendChild(stack);
+
+    const cards = document.createElement("div");
+    cards.className = "cards";
+    (p.hole_cards || []).forEach((c) => cards.appendChild(renderCard(c)));
+    box.appendChild(cards);
+
+    seatsEl.appendChild(box);
+  });
+
+  const logEl = document.getElementById("demo-log");
+  const line = document.createElement("div");
+  line.className = "demo-line" + (event.highlight ? " highlight" : "");
+  line.textContent = event.narration;
+  logEl.appendChild(line);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
 document.getElementById("btn-new-table").onclick = async () => {
   try {
     const name = document.getElementById("display-name").value || undefined;
@@ -333,6 +531,7 @@ document.getElementById("btn-start-table").onclick = async () => {
 
 function enterLobby() {
   document.getElementById("setup-panel").style.display = "none";
+  document.getElementById("demo-teaser").style.display = "none";
   document.getElementById("lobby-panel").style.display = "block";
   document.getElementById("lobby-table-id").textContent = tableId;
   document.getElementById("lobby-max").textContent = maxSeats;
