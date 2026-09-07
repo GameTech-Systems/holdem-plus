@@ -59,7 +59,15 @@ representing the project in public spaces.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may
-be reported to the project maintainers at: ToBeUpdated
+be reported via the project's GitHub Discussions:
+https://github.com/GameTech-Systems/holdem-plus/discussions/1
+
+This is an interim measure until a dedicated project email exists
+(planned once the holding entity's name is finalized). Discussions
+posts are public, so if you'd rather not share details openly, say
+only that you have a report and ask a maintainer to follow up
+privately, rather than posting sensitive specifics in the thread
+itself.
 
 All complaints will be reviewed and investigated promptly and fairly.
 All maintainers are obligated to respect the privacy and security of

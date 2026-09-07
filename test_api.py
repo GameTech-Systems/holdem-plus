@@ -865,3 +865,45 @@ def test_fold_at_every_street_ends_hand_cleanly_and_conserves_chips(n_clears):
     assert folder not in final["last_hand"]["revealed_hands"]
     # the table must be ready for more play, not stuck
     assert final["status"] in ("in_progress", "complete")
+
+
+# ---------------------------------------------------------------------------
+# Demo script endpoint (see demo_showcase.py)
+#
+# This is the fix for the "rabbit runner doesn't seem to show up in the
+# live demo" report: the feature was never actually missing from
+# static/index.html, it's just gated behind a turn/river fold, which the
+# reference bot policy (default_bot_action) essentially never triggers on
+# its own -- so a visitor clicking through a bot-filled or organically
+# played table could go a long time without ever seeing it. These tests
+# cover the endpoint surface; demo_showcase.py's own test file
+# (test_demo_showcase.py) covers the scripted poker logic itself.
+# ---------------------------------------------------------------------------
+
+def test_demo_script_endpoint_returns_both_showcase_hands_in_order():
+    resp = client.get("/demo/script")
+    assert resp.status_code == 200
+    hands = resp.json()["hands"]
+    assert [h["title"] for h in hands] == ["The Extra Card", "Rabbit Runner"]
+
+
+def test_demo_script_endpoint_stands_entirely_on_its_own():
+    """No /guest, /tables, or /join call anywhere above this test -- the
+    demo script must not require any table/session state to exist."""
+    resp = client.get("/demo/script")
+    assert resp.status_code == 200
+
+
+def test_demo_script_hands_include_a_rabbit_hunt_reveal():
+    resp = client.get("/demo/script")
+    hands = resp.json()["hands"]
+    rabbit_hand = next(h for h in hands if h["title"] == "Rabbit Runner")
+    reveal_events = [e for e in rabbit_hand["events"] if e["kind"] == "rabbit_hunt"]
+    assert len(reveal_events) == 1
+    assert reveal_events[0]["revealed_card"] is not None
+
+
+def test_demo_script_is_stable_across_repeated_requests():
+    first = client.get("/demo/script").json()
+    second = client.get("/demo/script").json()
+    assert first == second

@@ -43,6 +43,7 @@ from pydantic import BaseModel
 
 from analytics import AnalyticsLog, build_hand_record, simulate_standard_holdem_baseline
 from betting_state_machine import ActionType, IllegalActionError
+from demo_showcase import build_demo_script, serialize_demo_script
 from orchestrator import Hand, HandResult, OrchestratorError, Tournament
 from tournament_structure import generate_default_schedule
 
@@ -129,6 +130,21 @@ def _standard_holdem_baseline() -> Dict[str, float]:
     if _BASELINE_CACHE is None:
         _BASELINE_CACHE = simulate_standard_holdem_baseline(5000, rng=random.Random(0))
     return _BASELINE_CACHE
+
+
+# Cached once per process, same reasoning as _BASELINE_CACHE above: the
+# showcase script is a fixed, deterministic sequence of scripted hands (see
+# demo_showcase.py's module docstring for why it's scripted rather than
+# bot-driven), so it never changes between requests and there's no reason
+# to rebuild it every call.
+_DEMO_SCRIPT_CACHE: Optional[List[dict]] = None
+
+
+def _demo_script() -> List[dict]:
+    global _DEMO_SCRIPT_CACHE
+    if _DEMO_SCRIPT_CACHE is None:
+        _DEMO_SCRIPT_CACHE = serialize_demo_script(build_demo_script())
+    return _DEMO_SCRIPT_CACHE
 
 
 def _get_table(table_id: str) -> TableSession:
@@ -509,6 +525,22 @@ def submit_feedback(table_id: str, payload: FeedbackRequest) -> dict:
         raise HTTPException(404, "Unknown player_id -- create a guest session first via POST /guest")
     session.analytics.record_feedback(payload.thumbs_up)
     return {"thumbs_up": session.analytics.thumbs_up, "thumbs_down": session.analytics.thumbs_down}
+
+
+@app.get("/demo/script")
+def get_demo_script() -> dict:
+    """
+    A fully precomputed, deterministic script of a couple of showcase
+    hands for the public demo landing page -- creates no table, no
+    guest, and no Tournament, and never touches TABLES/GUESTS. See
+    demo_showcase.py's module docstring for why this is scripted rather
+    than bot-driven: Rabbit Runner in particular only ever shows up
+    after a turn/river fold, which the reference bot policy
+    (orchestrator.default_bot_action) essentially never does on its
+    own, so an organically-played or bot-filled table can go a very
+    long time without ever surfacing it.
+    """
+    return {"hands": _demo_script()}
 
 
 # ---------------------------------------------------------------------------

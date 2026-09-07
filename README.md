@@ -21,9 +21,11 @@ orchestrator.py             Hand + Tournament -- wires all of the above
                              behind two classes, plus Rabbit Runner
 analytics.py                hands/hour, pot-vs-blinds, showdown frequency,
                              hand-strength distribution, player feedback
+demo_showcase.py            two scripted, deterministic showcase hands for
+                             the public demo landing page (GET /demo/script)
 api.py                      REST + WebSocket layer over the orchestrator
 example_usage.py            runnable script showing the orchestrator API
-test_*.py                   188 tests, pytest
+test_*.py                   206 tests, pytest
 requirements.txt            fastapi / uvicorn / pydantic / pytest / httpx
 Dockerfile, .dockerignore   container image (Fly.io / Railway / Render-Docker)
 render.yaml                 Render Blueprint (native Python runtime)
@@ -33,17 +35,16 @@ DEPLOYMENT.md                step-by-step deploy instructions for all three
 ```
 
 Every module above the API layer is dependency-free standard-library
-Python. All 188 tests pass as of this handoff (163 prior + 25 added this
-session -- see `HANDOFF.md` for what's new: an analytics/instrumentation
-layer per the tech plan's Section 3.3, a fix for a real-time blind-clock
-bug found during this session's audit pass, and additional audit-testing
-coverage for multi-way all-ins and folds at every street).
+Python. All 206 tests pass as of this handoff (188 prior + 18 added this
+session for the new demo landing page -- see `HANDOFF.md` for the full
+rundown, and for what shipped in earlier sessions: the analytics/
+instrumentation layer, the real-time blind-clock fix, and so on).
 
 ## Running it
 
 ```bash
 pip install -r requirements.txt
-pytest -q                        # 188 passed
+pytest -q                        # 206 passed
 python3 example_usage.py         # orchestrator demo, no network
 uvicorn api:app --reload         # real server on http://127.0.0.1:8000
 ```
@@ -78,6 +79,26 @@ curl -s -X POST localhost:8000/tables/<table_id>/actions \
 
 Or connect a WebSocket to `ws://localhost:8000/ws/tables/<table_id>?player_id=<id>`
 for live push updates instead of polling `/state`.
+
+## Watch the demo
+
+`GET /demo/script` returns two fully scripted, deterministic hands --
+"The Extra Card" (the 3rd hole card completing a straight that isn't
+reachable with only 2) and "Rabbit Runner" (a turn fold, then a paid
+peek at the river that would have come) -- and `static/index.html`
+animates them on a "Watch the demo" button on the landing page, no
+guest/table/join required.
+
+This exists because both features are easy to miss by just clicking
+around: the 3rd hole card only visibly matters when it changes a hand's
+category, and Rabbit Runner only ever shows up after a turn/river fold,
+which the reference bot policy (`orchestrator.default_bot_action`)
+essentially never does on its own (see `demo_showcase.py`'s module
+docstring, and `HANDOFF.md`). The script is played through the real
+engine (`orchestrator.Hand`, given a rigged deck the same way
+`test_orchestrator.py` rigs one for its own deterministic tests), so
+it's provably real gameplay, not a mocked-up animation -- it just
+guarantees you'll see the two features every time instead of maybe.
 
 ## Analytics / instrumentation
 
