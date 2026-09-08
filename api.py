@@ -45,9 +45,18 @@ from analytics import AnalyticsLog, build_hand_record, simulate_standard_holdem_
 from betting_state_machine import ActionType, IllegalActionError
 from demo_showcase import build_demo_script, serialize_demo_script
 from orchestrator import Hand, HandResult, OrchestratorError, Tournament
+from poker_types import Card
 from tournament_structure import generate_default_schedule
 
 INTERNAL_TABLE_ID = "T1"  # Tournament's internal table id when max_table_size == seat count
+
+# Per-table cap on retained hand-history entries -- a memory bound for a
+# demo table left running a long time, not a meaningful limit in
+# practice (500 hands is a lot of play-money poker in one sitting).
+# Oldest entries are dropped first; hands_completed keeps counting past
+# this regardless, so "hand #612" stays a truthful label even once
+# earlier entries have aged out of hand_history itself.
+MAX_HAND_HISTORY = 500
 
 app = FastAPI(title="Hold'em Plus Demo API", version="0.1.0")
 
@@ -64,6 +73,44 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # In-memory state
 # ---------------------------------------------------------------------------
+
+@dataclass
+class HandHistoryEntry:
+    """
+    One row in a table's persistent hand log.
+
+    This is deliberately a third, different thing from the two other
+    "what just happened" concepts already in this file:
+
+      - last_hand_result / last_completed_hand (on TableSession, below)
+        only ever describe the single most-recently-finished hand, and
+        get overwritten completely the instant the *next* hand finishes.
+        That's the exact "the demo works, but the first hand's info goes
+        away as soon as the 2nd hand starts" gap this entry answers --
+        hand_history keeps every hand, not just the last one.
+      - analytics.HandRecord (see analytics.py) is aggregate-only by
+        design: no player identities, no actual cards, nothing a person
+        could read back as "what happened." It answers "is this game
+        fast/exciting on average," not "what happened in hand #12."
+
+    `result` is the engine's own HandResult (payouts, revealed hands,
+    community cards, folded players) -- this entry just adds the table-
+    log-specific framing (a stable hand_number, the blinds it was played
+    at, and a slot for a rabbit-hunt outcome if one gets used) rather
+    than duplicating any of HandResult's fields by hand.
+    """
+    hand_number: int
+    small_blind: int
+    big_blind: int
+    result: HandResult
+    # None until/unless a rabbit hunt is actually used on this hand --
+    # see _record_rabbit_hunt_in_history(). Once set, it's permanent:
+    # unlike last_completed_hand (which moves on the instant a further
+    # hand completes, closing the live rabbit-hunt window per that
+    # field's own docstring), this dict is a read-only historical record
+    # that doesn't expire.
+    rabbit_hunt: Optional[dict] = None
+
 
 @dataclass
 class TableSession:
@@ -111,6 +158,14 @@ class TableSession:
     # after each hand completes, from both the REST action handler and
     # the WebSocket handler (the two places a hand can finish).
     analytics: AnalyticsLog = field(default_factory=AnalyticsLog)
+    # Persistent, human-readable hand log -- see HandHistoryEntry above
+    # for how this differs from last_hand_result/last_completed_hand and
+    # from analytics. Bounded at MAX_HAND_HISTORY entries (oldest
+    # dropped first); hands_completed is the true lifetime count and
+    # keeps incrementing even past that bound, so hand numbering never
+    # resets or repeats even once older entries have aged out.
+    hand_history: List[HandHistoryEntry] = field(default_factory=list)
+    hands_completed: int = 0
 
 
 GUESTS: Dict[str, str] = {}          # player_id -> display_name
@@ -226,6 +281,50 @@ def _record_analytics_for_completed_hand(session: TableSession, hand: Hand, resu
     session.analytics.record_hand(record)
 
 
+def _record_hand_history_entry(session: TableSession, hand: Hand, result: HandResult) -> None:
+    """
+    Appends one HandHistoryEntry for a just-completed hand -- called from
+    both the REST action handler and the WebSocket handler, at exactly
+    the same two call sites as _record_analytics_for_completed_hand()
+    above, for the same reason: those are the only two places a hand can
+    actually finish. See HandHistoryEntry's own docstring for what this
+    is for and how it differs from last_hand_result/analytics.
+    """
+    session.hands_completed += 1
+    session.hand_history.append(
+        HandHistoryEntry(
+            hand_number=session.hands_completed,
+            small_blind=hand.small_blind,
+            big_blind=hand.big_blind,
+            result=result,
+        )
+    )
+    if len(session.hand_history) > MAX_HAND_HISTORY:
+        session.hand_history.pop(0)
+
+
+def _record_rabbit_hunt_in_history(
+    session: TableSession, player_id: str, river: List[Card], cost: int
+) -> None:
+    """
+    Mirrors a successful rabbit hunt into the matching hand_history entry
+    so it's visible in the log later too, not just in the immediate
+    response to the /rabbit-hunt call itself. Always targets
+    hand_history[-1]: rabbit_hunt() only ever operates on
+    last_completed_hand (see that field's docstring on TableSession), so
+    the entry _record_hand_history_entry() appended for that same hand is
+    always the last one in hand_history by the time a rabbit hunt for it
+    can possibly be requested -- the two are set from the same handful of
+    call sites and can't drift apart.
+    """
+    if session.hand_history:
+        session.hand_history[-1].rabbit_hunt = {
+            "player_id": player_id,
+            "river": [str(c) for c in river],
+            "cost": cost,
+        }
+
+
 # ---------------------------------------------------------------------------
 # Request bodies
 # ---------------------------------------------------------------------------
@@ -299,12 +398,46 @@ def _serialize_hand_result(
     }
 
 
+def _serialize_hand_history_entry(entry: HandHistoryEntry) -> dict:
+    """
+    Same card-stringification convention as _serialize_hand_result above,
+    and for the same reason there's no viewer-based redaction to apply:
+    every card in result.revealed_hands already went to a real showdown
+    and is public, and a folded player's hole cards were never added to
+    revealed_hands in the first place (orchestrator.Hand._finalize).
+    Unlike _serialize_hand_result, there's no rabbit_hunt_eligible flag
+    to compute here -- rabbit hunt is only ever available on the single
+    most-recently-finished hand (last_completed_hand), never retroactively
+    from the history log, so that question doesn't apply to entries here
+    at all. If a rabbit hunt *was* used while this hand still was the
+    most recent one, its permanent record lives in entry.rabbit_hunt.
+    """
+    result = entry.result
+    return {
+        "hand_number": entry.hand_number,
+        "small_blind": entry.small_blind,
+        "big_blind": entry.big_blind,
+        "payouts": dict(result.payouts),
+        "community_cards": [str(c) for c in result.community_cards],
+        "revealed_hands": {
+            pid: [str(c) for c in cards] for pid, cards in result.revealed_hands.items()
+        },
+        "folded_players": list(result.folded_players),
+        "rabbit_hunt": entry.rabbit_hunt,
+    }
+
+
 def _serialize_state(session: TableSession, viewer_player_id: Optional[str]) -> dict:
     payload: dict = {
         "table_id": session.table_id,
         "status": session.status,
         "max_seats": session.max_seats,
         "seated_players": list(session.player_ids),
+        # Cheap to include unconditionally (an int) so the client can show
+        # a "Hand History (N)" label without a separate round trip just
+        # to learn N -- the full log itself is still a separate fetch
+        # (GET /tables/{id}/hands), since it can grow arbitrarily long.
+        "hands_completed": session.hands_completed,
         "last_hand": (
             _serialize_hand_result(
                 session.last_hand_result, session.last_completed_hand, viewer_player_id
@@ -427,6 +560,33 @@ def get_state(table_id: str, player_id: Optional[str] = None) -> dict:
     return _serialize_state(session, player_id)
 
 
+@app.get("/tables/{table_id}/hands")
+def get_hand_history(table_id: str, limit: int = 50) -> dict:
+    """
+    The persistent per-hand log -- every hand played at this table (up to
+    MAX_HAND_HISTORY, oldest dropped first), most recent first, each with
+    the board, payouts, any revealed hands, and any rabbit-hunt outcome.
+    See HandHistoryEntry's docstring for how this differs from
+    `last_hand` on /state (which only ever describes the single most-
+    recent hand and disappears the moment the next one finishes -- this
+    endpoint is the fix for that) and from /analytics (aggregate numbers
+    only, no player identities or cards).
+
+    No player_id / viewer-based redaction here, deliberately: every card
+    this endpoint can possibly return already went to a real public
+    showdown (see _serialize_hand_history_entry's docstring), so there's
+    nothing to hide from any viewer, spectators included.
+    """
+    session = _get_table(table_id)
+    if limit <= 0:
+        raise HTTPException(400, "limit must be positive")
+    recent = session.hand_history[-limit:]
+    return {
+        "hands": [_serialize_hand_history_entry(e) for e in reversed(recent)],
+        "total_hands_played": session.hands_completed,
+    }
+
+
 @app.post("/tables/{table_id}/actions")
 async def apply_action(table_id: str, payload: ActionRequest) -> dict:
     session = _get_table(table_id)
@@ -455,6 +615,7 @@ async def apply_action(table_id: str, payload: ActionRequest) -> dict:
         session.last_hand_result = session.tournament.complete_hand(INTERNAL_TABLE_ID)
         session.last_completed_hand = hand
         _record_analytics_for_completed_hand(session, hand, session.last_hand_result)
+        _record_hand_history_entry(session, hand, session.last_hand_result)
         _start_next_hand_if_needed(session)
 
     await _broadcast_state(session)
@@ -489,6 +650,8 @@ async def rabbit_hunt(table_id: str, payload: RabbitHuntRequest) -> dict:
     # chips already committed to a hand already under way.
     if session.tournament is not None:
         session.tournament.stacks[payload.player_id] = hand.final_stacks()[payload.player_id]
+
+    _record_rabbit_hunt_in_history(session, payload.player_id, river, hand.rabbit_hunts[payload.player_id])
 
     await _broadcast_state(session)
     return {"river": [str(c) for c in river], "cost": hand.rabbit_hunts[payload.player_id]}
@@ -587,6 +750,7 @@ async def _handle_ws_message(session: TableSession, player_id: Optional[str], ms
                 session.last_hand_result = session.tournament.complete_hand(INTERNAL_TABLE_ID)
                 session.last_completed_hand = hand
                 _record_analytics_for_completed_hand(session, hand, session.last_hand_result)
+                _record_hand_history_entry(session, hand, session.last_hand_result)
                 _start_next_hand_if_needed(session)
         elif msg_type == "rabbit_hunt":
             if player_id is None:
@@ -594,9 +758,12 @@ async def _handle_ws_message(session: TableSession, player_id: Optional[str], ms
             completed_hand = session.last_completed_hand
             if completed_hand is None:
                 raise OrchestratorError("No hand to rabbit hunt on")
-            completed_hand.rabbit_hunt(player_id)
+            river = completed_hand.rabbit_hunt(player_id)
             if session.tournament is not None:
                 session.tournament.stacks[player_id] = completed_hand.final_stacks()[player_id]
+            _record_rabbit_hunt_in_history(
+                session, player_id, river, completed_hand.rabbit_hunts[player_id]
+            )
         else:
             raise OrchestratorError(f"Unknown message type: {msg_type!r}")
     except (OrchestratorError, IllegalActionError, KeyError) as exc:

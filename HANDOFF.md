@@ -4,179 +4,161 @@
 Claude session or a human developer. This tells you exactly what exists,
 what's been verified, what's deliberately left undone, and the fastest path
 from here forward. It supersedes the previous `HANDOFF.md` — that version's
-Section 0 (the analytics/instrumentation session) is now historical
+Section 0 (the demo-showcase/landing-page session) is now historical
 background; see Section 0 below for the current state instead.
 
-Start with `README.md` for how to run things. This document is about
-*state and decisions*, not setup commands.
+Start with `README.md` for how to run things and `POLISH_PLAN.md` for the
+forward-looking backlog. This document is about *state and decisions*.
 
 ---
 
 ## 0. Status as of the most recent session — read this first
 
-This session's brief, from chat: close out four open items, and build
-something that makes the live demo "good enough to showcase" — specifically
-a scripted, automatic playthrough of a couple of hands so a visitor (or a
-potential contributor) doesn't have to stumble into the interesting parts
-by luck.
+This session's brief, from chat: the live demo works, but a table's first
+hand plays out and then its info "goes away" the moment the second hand
+starts — add a way to review each hand's log in a collapsible box, then
+write a phased polish plan for future sessions (assume ~5-hour working
+windows), and leave a fresh handoff behind.
 
-**This sandbox had an actual live clone of `github.com/GameTech-Systems/holdem-plus`
-already checked out** (confirmed via `git remote -v`), so this session
-verified claims against it directly rather than trusting only the
-pasted-in chat snapshot — same practice the prior session recommended.
+**Verified the live repo directly rather than trusting the pasted-in chat
+snapshot — same practice every prior session has recommended, and worth
+restating because it mattered again this time.** The chat's own attached
+file snapshot (`side_pots.py`, `api.py`, `static/index.html`, etc., pasted
+in as conversation documents) turned out to predate `analytics.py` and
+`demo_showcase.py` entirely — an older state than even the *previous*
+`HANDOFF.md`'s own Section 0 described. Cloning
+`github.com/GameTech-Systems/holdem-plus` fresh (reachable from this
+sandbox's network allowlist, confirmed the same way the prior session
+confirmed it) and working from that, not the chat attachments, is what
+caught this. If you're reading this in a chat session that has files
+pasted into it, assume they may be stale until you've cloned and checked.
 
 ### Verification findings, before any code was written
 
-- The 6 files saved in the Claude Project (`HANDOFF.md`, `analytics.py`,
-  `test_analytics.py`, `api.py`, `test_api.py`, `README.md`) were
-  **byte-identical** to what's live (`git diff --stat HEAD` on all five
-  tracked ones came back empty). No drift there this time.
-- **`TRADEMARKS.md` — confirmed fixed.** The live file now reads "The
-  Hold'em Plus Poker Variant was first presented by James Tinghitella
-  here: https://sites.google.com/view/gametechsystems/home" — the
-  previously-bare URL has a proper framing sentence now. This closes open
-  item 3 from the prior handoff; verified directly, not just taken on
-  faith from the chat request.
-- **`CODE_OF_CONDUCT.md` — confirmed still broken.** Live repo still had
-  `ToBeUpdated` for the enforcement contact. Fixed this session (below).
-- **`static/index.html`'s Rabbit Runner UI is genuinely live** — the
-  button/reveal code has been deployed for a while (`git log` shows
-  `static/index.html` was last touched several commits back, well before
-  this session). This is not a stale-deploy problem.
-- **New finding: `HANDOFF.md` was deleted from the live repo.**
-  `git log --oneline --all -- HANDOFF.md` shows it existed, then a commit
-  titled `Delete HANDOFF.md` removed it, and nothing has re-added it since
-  (`git status` shows it as untracked in this checkout — it only exists
-  here because it's separately saved in the Claude Project). The actual
-  GitHub repo currently has **no handoff doc at all**. See open decision 3
-  below.
-- The GitHub Discussions thread the chat pointed at
-  (`.../discussions/1`) is real and reachable, and currently holds only
-  GitHub's generic auto-generated welcome post from `BetterToBest` — a
-  real welcome message replaces something meaningful there, not a blank
-  page.
-
-### Diagnosis: "the game doesn't show the rabbit runner update"
-
-Not a bug, and not a stale deploy. **Rabbit Runner eligibility requires
-folding on the turn or river** (`orchestrator.Hand.is_eligible_for_rabbit_hunt`),
-and `orchestrator.default_bot_action` — the reference bot policy used to
-fill seats and drive simulations — checks or calls whenever it legally
-can, and only ever reaches `FOLD` as an absolute last resort. Since
-`ALL_IN` is a legal action any time a player still has a stack, that last
-resort is essentially never reached while a bot has chips. A bot-filled
-table, or a human just clicking check/call, can run for a long time
-without a single qualifying fold — so the feature can look "not there"
-purely by never coming up, even though the UI code for it has been
-deployed for a while.
-
-**Fix approach:** did *not* modify `default_bot_action` — several existing
-tests depend on its exact "never folds while it has chips" behavior (e.g.
-`test_checked_down_hand_conserves_total_chips` asserts all 5 community
-cards get dealt, which requires nobody folding early). Changing shared
-engine-adjacent code for a cosmetic demo concern risked breaking that
-contract for no good reason. Instead, this session built a separate,
-additive, fully **scripted** demo mode that guarantees showing the
-feature every time, without touching bot behavior at all.
+- `pytest -q` on a fresh clone: **206 passed**, matching the previous
+  `HANDOFF.md`'s stated baseline exactly. No drift in the engine/API/test
+  layers since that session.
+- **A live, in-progress upload mistake was caught mid-history and had
+  already been corrected minutes before this session started.** `git log`
+  on `static/index.html` shows: the demo-showcase UI additions (the
+  "Watch the demo" teaser + animated panel) were first uploaded to the
+  wrong path — a new file at the repo **root** (`index.html`, 797 lines) —
+  then deleted (`Delete index.html`), then correctly re-added as 199 new
+  lines appended onto the real `static/index.html` (598 → 797 lines),
+  both within the same minute, timestamped today. Net effect: the
+  live repo's `static/index.html` does genuinely contain the demo panel
+  described in the prior handoff; it just took a false start to get
+  there. Flagging this because it's a concrete, just-happened instance of
+  exactly the upload-path mistake `POLISH_PLAN.md` Phase 0 now warns
+  about — the project's actual git history, not a hypothetical.
+- Confirmed live (not just claimed): `TRADEMARKS.md` has the
+  `sites.google.com/view/gametechsystems/home` framing sentence;
+  `CODE_OF_CONDUCT.md`'s enforcement contact points at the GitHub
+  Discussions thread, not `ToBeUpdated`. Both matched the prior
+  handoff's description exactly.
+- **Open decision 2 from the prior handoff is resolved:** `HANDOFF.md`
+  is back in the live repo root (`git log -- HANDOFF.md` shows an
+  "Add files via upload" commit adding it back, and a byte-for-byte
+  `diff` against the version pasted into this chat came back empty). A
+  fresh clone is self-sufficient again; no need to source it from
+  anywhere else going forward.
+- Did **not** attempt to verify the live Render URL
+  (`https://holdem-plus-demo.onrender.com/app/`) reflects this repo
+  state — `web_fetch` in this sandbox only allows URLs already surfaced
+  by a search or a prior fetch, and a search for the exact Render
+  subdomain didn't surface it. This session has no more evidence than
+  the prior one about whether pushes to `main` currently auto-deploy;
+  see `POLISH_PLAN.md` Phase 0.
 
 ### What shipped this session
 
-1. **`demo_showcase.py`** (new) — two fully scripted, deterministic hands:
-   - *"The Extra Card"* — 3 players, checked down to showdown; one
-     player's 3rd hole card completes a straight that isn't reachable
-     from the same deal with only 2 hole cards (a cleaner, from-scratch
-     version of the scenario `test_hand_evaluator.py`'s
-     `test_third_hole_card_enables_a_hand_unreachable_with_two_hole_cards`
-     already proves works at the evaluator level).
-   - *"Rabbit Runner"* — heads-up; one player folds on the turn facing a
-     bet, the hand ends, and `Hand.rabbit_hunt()` is called immediately
-     after to reveal the river that would have come.
+1. **`api.py`** — a persistent, per-hand log, separate from both the
+   existing "last finished hand" concept and from the analytics layer:
+   - `HandHistoryEntry` (new dataclass): `hand_number`, `small_blind`,
+     `big_blind`, the hand's own `HandResult`, and an optional
+     `rabbit_hunt` dict filled in later if one gets used.
+   - `TableSession.hand_history: List[HandHistoryEntry]` (bounded at the
+     new `MAX_HAND_HISTORY = 500`, oldest dropped first) and
+     `TableSession.hands_completed: int` (a true lifetime counter that
+     keeps incrementing past that bound, so hand numbering never resets
+     or repeats once old entries age out).
+   - `_record_hand_history_entry()` / `_record_rabbit_hunt_in_history()`
+     — called from the exact same call sites
+     `_record_analytics_for_completed_hand()` already was (both the REST
+     action handler and the WebSocket handler), for the same reason:
+     those are the only two places a hand can actually finish. The
+     WebSocket `rabbit_hunt` branch previously discarded
+     `completed_hand.rabbit_hunt(player_id)`'s return value entirely —
+     now captures it (`river = ...`) so it can be recorded.
+   - New endpoint: `GET /tables/{table_id}/hands?limit=50` — most-recent-
+     first, no per-viewer redaction needed (every card it can return
+     already went to a real public showdown, same reasoning
+     `_serialize_hand_result` already documented). Returns
+     `{"hands": [...], "total_hands_played": N}`. 400 on
+     `limit <= 0`, 404 on an unknown table, `{"hands": [], "total_hands_played": 0}`
+     (200, not an error) for a real table that just hasn't played a hand
+     yet.
+   - `_serialize_state()` now always includes `hands_completed` (a plain
+     int) so the client can show a log size without a separate round
+     trip just to learn it.
+2. **`static/index.html`** — a collapsible "Hand history" panel
+   (`<details class="panel history-panel">`) below the existing "Table
+   activity" log, each hand itself a nested `<details>` row (hand
+   number, board, winner — reusing the existing em-dash-separated phrasing
+   convention from the last-hand banner) that expands to show revealed
+   hole cards (rendered as real mini card sprites via the existing
+   `renderCard()` helper, not just text), folded players, and any
+   Rabbit Runner outcome. The full list is fetched only while the panel
+   is open — opening it, a genuinely new hand finishing while it's
+   already open, and a rabbit hunt succeeding while it's open all
+   trigger a refresh; a closed panel costs nothing beyond the cheap
+   `hands_completed` count that rides along on every existing `/state`
+   poll/push. Reuses the established dark-felt/gold theme's CSS
+   variables throughout; no new colors or fonts introduced.
+3. **`test_api.py`** — 12 new tests: empty-state behavior (both "table
+   exists, never started" and "started, no hands yet"), unknown-table
+   404, the `hands_completed` counter, multi-hand ordering (proving
+   earlier hands' info doesn't disappear once later ones finish — the
+   specific report this answers), entry shape (board/payouts/no rabbit
+   hunt by default), a fold-without-showdown entry, the `limit` param
+   (including rejecting `<= 0`), rabbit hunt reflected into history via
+   both REST and WebSocket, and the `MAX_HAND_HISTORY` cap (via
+   `monkeypatch`, so it doesn't need to actually play 500 hands).
+4. **`README.md`** — new "Hand history" section, file listing and test
+   count updated to 218.
 
-   Both hands are built with a rigged deck (`_build_scripted_deck`,
-   generalizing `test_orchestrator.py`'s `_build_rigged_heads_up_deck` to
-   any seat count) and played through the *real*
-   `Hand`/`HandFlow`/`BettingRound`/`side_pots`/`hand_evaluator` stack —
-   nothing here reimplements game logic. Deterministic by design, not
-   bot-driven or random, specifically so the demo shows the same two
-   things every single time it's requested. See the module's own
-   docstring for the full reasoning.
+**Test suite: 218 passed** (206 prior + 12 new, all in `test_api.py`;
+no other module needed changes). Verified three ways, in increasing
+order of how close to "real" they get: the full `pytest -q` run; a
+live-server smoke test over actual HTTP (`uvicorn` + `curl`, not just
+`TestClient`, to rule out anything that only works via in-process ASGI);
+and a throwaway Node + jsdom smoke test of the real `static/index.html`
+file — mocked `fetch`, dispatched a real `toggle` event on the panel,
+and asserted on the resulting DOM (entry count, ordering, board text,
+mini `<div class="card">` elements actually present, detail rows for
+revealed hands/folded/rabbit-hunt) rather than just checking the script
+parses. That jsdom scaffolding (`node_modules`, throwaway `package.json`,
+the check script itself) was deleted before finishing up, same as the
+prior session did for its own frontend check — not part of the repo.
 
-2. **`test_demo_showcase.py`** (new) — 14 tests: category/payout
-   correctness for both scripted hands, chip conservation (including
-   confirming the Rabbit Runner fee is the *only* expected discrepancy —
-   see `orchestrator.Hand.rabbit_hunt`'s own docstring on why that fee
-   isn't modeled as going anywhere), board-reveal staging, and
-   determinism across repeated calls.
+**This did not include loading the live URL in an actual browser** — see
+Section 3. That gap is now unresolved across three consecutive sessions
+in a row; `POLISH_PLAN.md` Phase 0 makes it the explicit first item for
+whoever picks this up next.
 
-3. **`api.py`** — new `GET /demo/script` endpoint, cached process-wide
-   after first computation (same pattern as the existing
-   `_standard_holdem_baseline`, since the script is a pure function of no
-   input). Creates no table, no guest, no `Tournament`; never touches
-   `TABLES`/`GUESTS`.
+### The two open items from the prior handoff conversation
 
-4. **`test_api.py`** — 4 new endpoint tests, including one that calls
-   `/demo/script` with zero prior `/guest` or `/tables` calls, to pin
-   down that it genuinely stands on its own.
-
-5. **`static/index.html`** — a "Watch the demo" teaser panel plus an
-   animated demo panel (skip-ahead and exit controls), reusing the
-   existing dark felt/gold CSS variables and the existing
-   `renderCard()`/`suitInfo()` helpers so demo cards look identical to
-   real ones. The Rabbit Runner reveal renders as a visually distinct
-   "ghost card" (dashed outline, dimmed) appended after the real board,
-   so it never reads as a genuine 5th community card.
-
-   Verified two ways: `node --check` on the extracted script (syntax),
-   and a throwaway Node + jsdom smoke test that loaded the real file,
-   mocked `fetch` to serve the real `/demo/script` payload, and actually
-   clicked through the whole flow (watch demo → skip hand 1 → skip hand
-   2 → "that's the demo" message → exit demo) — zero thrown errors, seats
-   and log and community cards all populated as expected. That's
-   meaningfully stronger than a syntax check, but **it is still not the
-   same as loading the real deployed URL in a real browser** — see
-   Section 3. The jsdom scaffolding itself (`node_modules`, a throwaway
-   `package.json`, the smoke-test script) was verification-only and was
-   deleted before finishing up; it's not part of the repo and isn't in
-   the delivered files.
-
-6. **`CODE_OF_CONDUCT.md`** — `ToBeUpdated` replaced with the GitHub
-   Discussions link
-   (`https://github.com/GameTech-Systems/holdem-plus/discussions/1`),
-   with a short added note reconciling "this is a public thread" against
-   the paragraph immediately below it promising reporter privacy (the
-   note tells reporters to ask for a private follow-up rather than
-   posting sensitive specifics in the open thread).
-
-7. **`welcome_message.md`** (new — not a repo file; content meant to be
-   pasted as a comment on Discussion #1, or used to replace the generic
-   default post there).
-
-8. **`README.md`** — new "Watch the demo" section explaining the feature
-   and why it exists, updated file listing (`demo_showcase.py` added),
-   and the test count bumped to match.
-
-**Test suite: 206 passed** (188 prior + 18 new: 14 in
-`test_demo_showcase.py`, 4 added to `test_api.py`). Verified via
-`pytest -q` run clean multiple times across this session, including
-immediately after the doc-only edits (README/CODE_OF_CONDUCT don't affect
-tests, but re-ran anyway rather than assuming).
-
-### The four open items from the handoff conversation
-
-1. **CODE_OF_CONDUCT.md contact → GitHub Discussions:** done (above).
-2. **Entity naming mismatch** ("GamingTech, LLC" vs. "GameTech Systems" in
-   `TRADEMARKS.md`): still open, untouched this session — see Section 4.
-3. **Trademarks bare URL:** confirmed already resolved on the live repo
-   (verified directly, not just taken on the chat's word).
-4. **"Repo is live, deploy seems to have updated, but rabbit runner
-   doesn't show":** explained above — not a deploy problem, a
-   discoverability problem, now directly addressed by demo mode.
+1. **Entity naming mismatch** (`TRADEMARKS.md`): still open, untouched
+   this session — see Section 4.
+2. **`HANDOFF.md` absent from the live repo:** resolved (confirmed above,
+   independent of this session's own work — it had already been re-added
+   before this session started).
 
 ---
 
 ## 1. What exists right now
 
-Everything from the prior session, plus a scripted demo landing feature:
+Everything from prior sessions, plus the hand-history log:
 
 ```
 poker_types.py, hand_evaluator.py, betting_state_machine.py,
@@ -186,23 +168,24 @@ side_pots.py, tournament_structure.py, tournament_balancing.py
                     hand-strength distribution, player feedback)
   -> demo_showcase.py (two scripted, deterministic showcase hands,
                         built on top of orchestrator.Hand directly)
-  -> api.py (REST + WebSocket, /analytics, /feedback, /demo/script)
-  -> static/index.html (vanilla JS client, served at /app/, now with a
-                         "Watch the demo" teaser + animated playback)
+  -> api.py (REST + WebSocket, /analytics, /feedback, /demo/script,
+             /tables/{id}/hands [new])
+  -> static/index.html (vanilla JS client, served at /app/: table play,
+                         "Watch the demo" teaser + animated playback,
+                         and now a collapsible "Hand history" panel)
 ```
 
 Every module above the API layer is still dependency-free standard-library
-Python (`demo_showcase.py` included). Deployment configs are unchanged
-(`Dockerfile`/`.dockerignore`, `render.yaml`, `fly.toml`, `Procfile`,
-`DEPLOYMENT.md`). The live instance is
-`https://holdem-plus-demo.onrender.com/app/` — **this session's changes are
-not deployed there yet**; see Section 5.
+Python. Deployment configs are unchanged (`Dockerfile`/`.dockerignore`,
+`render.yaml`, `fly.toml`, `Procfile`, `DEPLOYMENT.md`). The live instance
+is `https://holdem-plus-demo.onrender.com/app/` — **this session's
+changes are not deployed there yet**; see Section 5 / `POLISH_PLAN.md`
+Phase 0.
 
-Governance/legal scaffolding: `LICENSE` (Apache 2.0), `NOTICE`,
-`TRADEMARKS.md` (bare-URL issue now resolved; entity-naming note still
-open), `CODE_OF_CONDUCT.md` (contact now points at Discussions;
-enforcement-guideline text unchanged), `CONTRIBUTING.md` (DCO-based
-sign-off flow, unchanged).
+Governance/legal scaffolding unchanged from the prior session: `LICENSE`
+(Apache 2.0), `NOTICE`, `TRADEMARKS.md` (bare-URL issue resolved;
+entity-naming note still open), `CODE_OF_CONDUCT.md` (contact points at
+Discussions), `CONTRIBUTING.md` (DCO-based sign-off flow).
 
 ---
 
@@ -225,37 +208,42 @@ Carried forward from prior sessions (still accurate):
   before a new hand is dealt, not via a background task.
 - The standard-Hold'em baseline is a cached, process-wide, seeded Monte
   Carlo estimate, not recomputed per request.
+- `demo_showcase.py` is deliberately scripted/deterministic, not
+  bot-driven; `default_bot_action` is deliberately left unmodified (see
+  prior handoff for the full reasoning — still applies unchanged).
 
 New this session:
 
-- **`demo_showcase.py` is deliberately scripted and deterministic, not
-  bot-driven or random.** See the diagnosis above for why: a
-  bot/random-driven demo could easily run its two or three hands without
-  ever surfacing a turn/river fold at all. `_build_scripted_deck`
-  generalizes the rigged-deck technique `test_orchestrator.py` already
-  established (`_build_rigged_heads_up_deck`) to arbitrary seat counts —
-  if a future session adds a third showcase hand, reuse that helper
-  rather than hand-building another deck from scratch.
-- **Demo events always do a full-reveal snapshot** — every seat's hole
-  cards, regardless of fold/all-in status (`demo_showcase._snapshot`).
-  This is intentionally different from `api.py`'s real
-  `_serialize_state`, which still redacts normally for actual tables.
-  It's a demo-only, spectator/teaching convention, not a change to real
-  hidden-information rules — `/demo/script` is a separate, stateless,
-  read-only endpoint that never touches `TABLES`/`GUESTS` or any real
-  `Hand`. Don't let a future edit blur this line by, say, routing real
-  table state through the same full-reveal snapshot helper.
-- **`default_bot_action` was deliberately left unmodified**, even though
-  making it occasionally fold would also help real bot-filled tables
-  surface Rabbit Runner sometimes. Multiple existing tests
-  (`test_orchestrator.py`, `test_api.py`) depend on its exact "never
-  folds while it has chips" behavior. If a future session wants that
-  behavior for bot-filled (non-demo) tables, add a new, separate,
-  opt-in policy function — don't change the shared default.
-- **`/demo/script` is cached process-wide**, same reasoning and same
-  pattern as `_standard_holdem_baseline`: it's a pure function of no
-  input, so there's no reason it would ever produce different output
-  within a process.
+- **`hand_history` is a third, deliberately distinct thing from two
+  concepts that already existed** — see `HandHistoryEntry`'s own
+  docstring in `api.py` for the full reasoning, but briefly:
+  `last_hand_result`/`last_completed_hand` only ever describe the single
+  most-recently-finished hand (by design — that's what made Rabbit
+  Runner's timing work in the first place, see the prior handoff's Bug
+  3), and `analytics.HandRecord` is aggregate-only with no player
+  identities or actual cards (by design — see `analytics.py`'s module
+  docstring). Neither was reusable for "let a person look back at what
+  happened in hand #12." Don't try to collapse these three into one
+  structure later without re-reading why each is shaped the way it is.
+- **`hands_completed` is the true lifetime counter; `hand_history`'s
+  length is not.** The list is capped (`MAX_HAND_HISTORY`) and drops the
+  oldest entry once full; the counter never resets. `hand_number` on a
+  retained entry is always meaningful and never reused, even once older
+  entries have aged out of the list itself.
+- **Rabbit hunt's history mirroring always targets `hand_history[-1]`,
+  never looks it up by hand number.** This only works because
+  `rabbit_hunt()` itself is already constrained to `last_completed_hand`
+  (the single most-recently-finished hand — see that field's own
+  long-standing docstring) and both are written from the same handful of
+  call sites in the same order. If a future session ever changes rabbit
+  hunt to work retroactively on an older hand, this mirroring logic needs
+  to change with it, not just the eligibility check.
+- **The frontend fetches the history list lazily, on open, not on every
+  poll/WS push.** Only the cheap `hands_completed` int rides along on
+  every `/state` response unconditionally. Don't change `/state` to
+  inline the full hand list "for convenience" — that reintroduces the
+  exact unbounded-payload-growth problem the lazy fetch was designed to
+  avoid on a long-running table.
 
 ---
 
@@ -264,102 +252,93 @@ New this session:
 Carried forward (all still true): no real frontend fork, no persistence,
 no multi-table routing in the API, no rate limiting/auth beyond opaque
 guest IDs, the known engine simplifications documented in their own
-modules, no analytics UI, the Monte Carlo baseline is Hold'em-only (no
-single "here's the delta" endpoint).
+modules, the Monte Carlo baseline is Hold'em-only (no single "here's the
+delta" endpoint), demo mode is fixed at exactly two hands, and the
+`welcome_message.md` draft has still never been posted to GitHub
+Discussions.
 
-New from this session:
+New from this session — full detail and priority order in
+`POLISH_PLAN.md`, summarized here:
 
-- **Demo mode is fixed at exactly 2 hands.** A natural next addition,
-  flagged but not built: a 3rd showcase hand demonstrating multi-way side
-  pots (`side_pots.compute_side_pots`/`award_pots`) — arguably the other
-  genuinely easy-to-get-wrong piece of this codebase, and it would round
-  out the "prove the hard parts work" pitch. Would need a 3-or-4-handed
-  rigged deck with at least one short stack forced all-in;
-  `_build_scripted_deck` should handle it as-is, it just needs the right
-  card/action script written against it.
-- **No real browser click-through happened this session.** Verification
-  was the full pytest suite (206 passed) plus a throwaway Node+jsdom
-  smoke test (see Section 0) that is meaningfully stronger than a syntax
-  check but is still not "loaded the actual deployed URL in a real
-  browser." Do that before pointing anyone outside the project at it —
-  this is the same standing gap the prior two handoffs both flagged and
-  neither session was able to close from this sandbox.
-- **`welcome_message.md` is drafted but not posted** — someone needs to
-  actually paste it into Discussion #1 (or use it to replace the generic
-  default post there).
-- **This session's changes are not pushed or redeployed.** Same "no push
-  credentials / no deploy access from here" limitation as
-  `DEPLOYMENT.md` already documents.
-- **No frontend test harness was added to the repo.** The jsdom smoke
-  test was created and deleted within this session purely as
-  verification scaffolding — no `package.json`, no `node_modules`, no
-  committed JS test file. Real frontend test coverage, if this project
-  wants it, is still a from-scratch addition for a future session.
+- **No pagination in the hand-history UI.** The endpoint accepts
+  `limit`; the client always requests the default and has no "load
+  older hands" control. Not a problem yet at demo scale; will be the
+  moment a table runs past ~50 hands in one sitting.
+- **No explicit multi-way side-pot test of the history feature.** Every
+  new test this session used heads-up hands. `HandHistoryEntry` wraps
+  `HandResult` verbatim, so the risk of it mishandling multiple `Pot`s
+  is low, but "low risk" isn't "tested" — see `POLISH_PLAN.md` Phase 1.
+- **No real-browser click-through of the new panel** (or of anything
+  else — see below). The jsdom check is meaningfully stronger than a
+  syntax check but is still not a real browser.
+- **This session's changes are not pushed or redeployed.** Same
+  "no push credentials / no deploy access from here" limitation every
+  prior session has hit.
+- **Still no committed frontend test harness.** The jsdom scaffolding
+  was, again, created and deleted within this session, purely as
+  verification — matching (not improving on) the prior session's own
+  practice. A real, repo-committed frontend test setup is still a
+  from-scratch addition for whoever eventually wants it enough to own
+  the `package.json`/`node_modules` maintenance that comes with it.
 
 ---
 
 ## 4. Open decisions (not bugs — need a person to decide, not a fix)
 
 1. **Entity naming mismatch** ("GamingTech, LLC" vs. "GameTech Systems"
-   in `TRADEMARKS.md`) — still unresolved.
-2. **`HANDOFF.md` is currently absent from the live repo** (deleted at a
-   past commit, never restored — see Section 0). Decide whether to commit
-   this version back to the actual repo at the root as `HANDOFF.md`
-   (recommended — keeps a fresh session's `git clone` self-sufficient,
-   matching this project's own stated practice in Section 6 below) or
-   keep it Claude-Project-only going forward. If it goes back into the
-   repo, this exact file is what to commit.
-3. **How far to extend demo mode** — a 3rd (side-pot) showcase hand, an
-   interactive bot-filled demo table instead of a fixed script, a
-   "replay" control, etc. None of this was built this session; all of it
-   is just flagged as options for whoever picks this up next.
+   in `TRADEMARKS.md`) — still unresolved, now three handoffs running.
+2. ~~`HANDOFF.md` absent from the live repo~~ — resolved; see Section 0.
+3. **How far to extend demo mode** — no longer just "flagged as an
+   option": `POLISH_PLAN.md` Phase 2 has a concrete plan for a third,
+   side-pot-focused showcase hand, sequenced right after the multi-way
+   test work Phase 1 already needs to do anyway. Still needs someone to
+   actually pick it up.
 
 ---
 
 ## 5. Fastest path from here forward
 
-1. **Get this session's changes live**: add/update `demo_showcase.py`,
-   `test_demo_showcase.py`, `api.py`, `test_api.py`, `static/index.html`,
-   `CODE_OF_CONDUCT.md`, `README.md`, and (per open decision 2) this
-   `HANDOFF.md` in the actual repo; confirm `pytest -q` shows 206 passing
-   on a clean clone; push; redeploy to Render.
-2. **Post `welcome_message.md`'s content** as a comment on Discussion #1
-   (or use it to replace the generic default post there).
-3. **Do the live-URL audit pass this session couldn't do**: once
-   deployed, load `https://holdem-plus-demo.onrender.com/app/` in an
-   actual browser, click "Watch the demo," and confirm both hands
-   actually play through and the Rabbit Runner ghost-card reveal renders
-   correctly outside of jsdom.
-4. **Decide open items 1 and 2** from Section 4.
-5. **Consider the side-pot 3rd showcase hand** as the next demo-mode
-   addition (Section 3).
-6. **Longer-standing priorities, unchanged from before**: surface
-   analytics somewhere a human actually looks at it, and evaluate
-   committing to a real frontend fork (PokerTH web client or
-   `bocaletto-luca/Texas-Holdem`) — still the biggest lever for a
-   casino/poker-room contact taking the demo seriously.
+Full detail, in order, with definitions of done, is in
+`POLISH_PLAN.md`. Short version:
+
+1. **Phase 0 — get this session's changes live, then finally do the
+   real-browser click-through** every prior session has flagged and
+   none has closed. This is the loudest recommendation in this document.
+2. **Phase 1** — hand-history pagination, a failure state for a bad
+   fetch, and the multi-way side-pot test the feature is still missing.
+3. **Phase 2** — the third (side-pot) demo showcase hand, using the
+   rigged deck Phase 1's test work already needs to build.
+4. **Phase 3** — an actual visual surface for `/analytics`, which has
+   returned real numbers since the analytics session and has never been
+   looked at by a human anywhere but raw JSON.
+5. **Phase 4+** — the real frontend fork (PokerTH web client or similar)
+   the tech plan has recommended since Section 3.2 and every handoff
+   since has called "the biggest lever," still not started. Its own plan,
+   not a bullet here, whenever someone actually commits to it.
 
 ---
 
 ## 6. If you're a fresh Claude session picking this up
 
-**Read Section 0 in full, then verify it yourself before trusting it.**
-`git clone https://github.com/GameTech-Systems/holdem-plus` is reachable
-from a sandboxed environment with this session's network allowlist
-(confirmed both via an already-present clone and independently via
-`web_fetch` against `github.com`) — clone it, don't assume a handoff
-doc's claims are still true without checking. This session found real
-drift a purely pasted-in snapshot wouldn't have shown on its own
-(`HANDOFF.md`'s own deletion from the repo).
+**Read Section 0 in full, then verify it yourself before trusting it —
+including this version.** `git clone
+https://github.com/GameTech-Systems/holdem-plus` was reachable from this
+sandbox's network allowlist again this session, worked cleanly, and
+caught real drift (the pasted-chat-snapshot staleness, and the
+just-happened upload-path mistake, both described above) that trusting
+either the chat attachments or a handoff doc's prose alone would have
+missed. Clone it. Don't assume anything in this file is still true
+without checking, the same way this session didn't assume the prior
+file was.
 
-Run `pytest -q` first thing; the baseline as of this session is **206
-passed**. If `HANDOFF.md` isn't in the clone, that's not a surprise — see
-open decision 2.
+Run `pytest -q` first thing; the baseline as of this session is **218
+passed**.
 
-Standing advice, still exactly right, and still not fully closed out:
-don't stop at "the code exists, the tests pass, and it looks right in
-isolation" — load the actual live URL and click through real behavior
-before calling anything shipped. This session got closer than either
-prior one (a real jsdom click-through, not just a syntax check) but still
-didn't clear that bar. Whoever picks this up next should be the session
-that finally does.
+Standing advice, now stated for the fourth time because it keeps not
+happening: don't stop at "the code exists, the tests pass, it looks
+right in isolation, and a jsdom check didn't throw." Load the actual
+live URL and click through real behavior in a real browser before
+calling anything shipped. Every session so far has gotten a little
+closer (syntax check → jsdom click-through → jsdom click-through of a
+second feature) without ever actually clearing the bar. Whoever picks
+this up next should be the one who finally does.

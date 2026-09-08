@@ -907,3 +907,212 @@ def test_demo_script_is_stable_across_repeated_requests():
     first = client.get("/demo/script").json()
     second = client.get("/demo/script").json()
     assert first == second
+
+
+# ---------------------------------------------------------------------------
+# Hand history (see api.HandHistoryEntry's docstring)
+#
+# Regression coverage for the specific report this feature answers: a
+# table's first hand plays out, then its info "goes away" the moment the
+# second hand starts. That's `last_hand` behaving exactly as documented
+# (it only ever describes the single most-recently-finished hand) -- the
+# fix isn't a change to `last_hand`, it's this separate, persistent log.
+# ---------------------------------------------------------------------------
+
+def _play_until_hands_completed(table_id: str, target: int, max_actions: int = 400) -> None:
+    """
+    Checks/calls every actor's turn until at least `target` hands have
+    finished at this table (or the tournament ends first).
+
+    Deliberately keys off state["hands_completed"] rather than watching
+    for `last_hand` to change: `last_hand` stays non-None on every single
+    poll after the very first hand completes (see
+    test_last_hand_persists_on_subsequent_polls_until_next_hand_finishes
+    above), so "it's not None" can't distinguish "a new hand just
+    finished" from "the same already-finished hand is still being
+    reported" -- only the count actually incrementing can.
+    """
+    for _ in range(max_actions):
+        state = client.get(f"/tables/{table_id}/state").json()
+        if state["hands_completed"] >= target or state["hand"] is None:
+            return
+        actor = state["hand"]["current_actor"]
+        if actor is None:
+            return
+        actor_state = client.get(f"/tables/{table_id}/state", params={"player_id": actor}).json()
+        legal_actions = actor_state["hand"]["legal_actions"]
+        action_type = "CHECK" if "CHECK" in legal_actions else "CALL"
+        resp = client.post(f"/tables/{table_id}/actions", json={"player_id": actor, "action_type": action_type})
+        assert resp.status_code == 200
+    raise AssertionError(f"did not reach {target} completed hands within {max_actions} actions")
+
+
+def test_hand_history_empty_before_any_hand_completes():
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    assert client.get(f"/tables/{table_id}/hands").json() == {"hands": [], "total_hands_played": 0}
+
+
+def test_hand_history_available_even_before_table_is_started():
+    """A table that exists but hasn't started yet has played zero hands --
+    that's a valid, error-free answer, not a 400/404."""
+    table_id = make_table()
+    resp = client.get(f"/tables/{table_id}/hands")
+    assert resp.status_code == 200
+    assert resp.json() == {"hands": [], "total_hands_played": 0}
+
+
+def test_hand_history_unknown_table_returns_404():
+    resp = client.get("/tables/does-not-exist/hands")
+    assert resp.status_code == 404
+
+
+def test_state_reports_hands_completed_count():
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    assert client.get(f"/tables/{table_id}/state").json()["hands_completed"] == 0
+    _play_to_first_hand_completion(table_id)
+    assert client.get(f"/tables/{table_id}/state").json()["hands_completed"] == 1
+
+
+def test_hand_history_records_every_hand_not_just_the_last_one():
+    """
+    The specific gap this feature closes: after 3 hands, `last_hand` only
+    ever reflects hand 3 -- but /hands must still show all of 1, 2, and 3,
+    proving earlier hands' info didn't disappear once later ones finished.
+    """
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    _play_until_hands_completed(table_id, 3)
+
+    history = client.get(f"/tables/{table_id}/hands").json()
+    assert history["total_hands_played"] == 3
+    assert [h["hand_number"] for h in history["hands"]] == [3, 2, 1]  # most recent first
+
+
+def test_hand_history_entry_has_board_payouts_and_no_rabbit_hunt_by_default():
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    _play_to_first_hand_completion(table_id)
+
+    entry = client.get(f"/tables/{table_id}/hands").json()["hands"][0]
+    assert entry["hand_number"] == 1
+    assert entry["small_blind"] == 1 and entry["big_blind"] == 2
+    assert len(entry["community_cards"]) == 5  # checked all the way down
+    assert sum(entry["payouts"].values()) > 0
+    assert entry["rabbit_hunt"] is None
+
+
+def test_hand_history_records_a_fold_without_showdown_correctly():
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    state = client.get(f"/tables/{table_id}/state").json()
+    folder = state["hand"]["current_actor"]
+    winner = p1 if folder == p0 else p0
+    client.post(f"/tables/{table_id}/actions", json={"player_id": folder, "action_type": "FOLD"})
+
+    entry = client.get(f"/tables/{table_id}/hands").json()["hands"][0]
+    assert entry["folded_players"] == [folder]
+    assert entry["revealed_hands"] == {}  # nobody went to showdown
+    assert entry["payouts"].get(winner, 0) > 0
+
+
+def test_hand_history_limit_param_restricts_and_keeps_recency_order():
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    _play_until_hands_completed(table_id, 4)
+
+    limited = client.get(f"/tables/{table_id}/hands", params={"limit": 2}).json()
+    assert [h["hand_number"] for h in limited["hands"]] == [4, 3]
+    assert limited["total_hands_played"] == 4  # true count, independent of limit
+
+
+def test_hand_history_rejects_non_positive_limit():
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    resp = client.get(f"/tables/{table_id}/hands", params={"limit": 0})
+    assert resp.status_code == 400
+
+
+def test_hand_history_reflects_rabbit_hunt_once_used_via_rest():
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    folder = _play_heads_up_to_turn_fold(table_id)
+    rh = client.post(f"/tables/{table_id}/rabbit-hunt", json={"player_id": folder}).json()
+
+    entry = client.get(f"/tables/{table_id}/hands").json()["hands"][0]
+    assert entry["rabbit_hunt"] == {"player_id": folder, "river": rh["river"], "cost": rh["cost"]}
+
+
+def test_hand_history_reflects_rabbit_hunt_used_over_websocket():
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    folder = _play_heads_up_to_turn_fold(table_id)
+    with client.websocket_connect(f"/ws/tables/{table_id}?player_id={folder}") as ws:
+        ws.receive_json()  # initial state on connect
+        ws.send_json({"type": "rabbit_hunt"})
+        ws.receive_json()
+
+    entry = client.get(f"/tables/{table_id}/hands").json()["hands"][0]
+    assert entry["rabbit_hunt"] is not None
+    assert entry["rabbit_hunt"]["player_id"] == folder
+
+
+def test_hand_history_storage_is_capped_but_lifetime_count_is_not(monkeypatch):
+    """
+    MAX_HAND_HISTORY bounds how many entries are *retained*, but
+    hands_completed (and therefore hand_number) is a true lifetime
+    counter that keeps incrementing regardless -- hand numbering never
+    resets or repeats just because earlier entries aged out of storage.
+    """
+    import api as api_module
+    monkeypatch.setattr(api_module, "MAX_HAND_HISTORY", 2)
+
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    _play_until_hands_completed(table_id, 5)
+
+    history = client.get(f"/tables/{table_id}/hands").json()
+    assert history["total_hands_played"] == 5
+    assert len(history["hands"]) == 2
+    assert [h["hand_number"] for h in history["hands"]] == [5, 4]

@@ -25,7 +25,7 @@ demo_showcase.py            two scripted, deterministic showcase hands for
                              the public demo landing page (GET /demo/script)
 api.py                      REST + WebSocket layer over the orchestrator
 example_usage.py            runnable script showing the orchestrator API
-test_*.py                   206 tests, pytest
+test_*.py                   218 tests, pytest
 requirements.txt            fastapi / uvicorn / pydantic / pytest / httpx
 Dockerfile, .dockerignore   container image (Fly.io / Railway / Render-Docker)
 render.yaml                 Render Blueprint (native Python runtime)
@@ -35,16 +35,17 @@ DEPLOYMENT.md                step-by-step deploy instructions for all three
 ```
 
 Every module above the API layer is dependency-free standard-library
-Python. All 206 tests pass as of this handoff (188 prior + 18 added this
-session for the new demo landing page -- see `HANDOFF.md` for the full
-rundown, and for what shipped in earlier sessions: the analytics/
-instrumentation layer, the real-time blind-clock fix, and so on).
+Python. All 218 tests pass as of this handoff (206 prior + 12 added this
+session for the hand-history log -- see `HANDOFF.md` for the full
+rundown, and for what shipped in earlier sessions: the demo landing
+page, the analytics/instrumentation layer, the real-time blind-clock
+fix, and so on).
 
 ## Running it
 
 ```bash
 pip install -r requirements.txt
-pytest -q                        # 206 passed
+pytest -q                        # 218 passed
 python3 example_usage.py         # orchestrator demo, no network
 uvicorn api:app --reload         # real server on http://127.0.0.1:8000
 ```
@@ -99,6 +100,22 @@ engine (`orchestrator.Hand`, given a rigged deck the same way
 `test_orchestrator.py` rigs one for its own deterministic tests), so
 it's provably real gameplay, not a mocked-up animation -- it just
 guarantees you'll see the two features every time instead of maybe.
+
+## Hand history
+
+`GET /tables/<table_id>/hands` returns every hand played at a table (most
+recent first, capped at `MAX_HAND_HISTORY` = 500 retained per table),
+each with its board, payouts, any revealed hands, folded players, and
+any Rabbit Runner outcome. This is deliberately different from `/state`'s
+`last_hand` field, which only ever describes the single most-recently-
+finished hand and gets overwritten the moment the next one completes --
+that's the "the first hand's info goes away as soon as the 2nd hand
+starts" gap this closes. It's also different from `/analytics`, which is
+aggregate-only (hands/hour, category distribution, no player identities
+or actual cards) -- this is the human-readable, per-hand log for
+actually looking back at what happened, and `static/index.html` renders
+it as a collapsible "Hand history" panel, each hand further expandable
+for the detail, fetched lazily only while the panel is open.
 
 ## Analytics / instrumentation
 
