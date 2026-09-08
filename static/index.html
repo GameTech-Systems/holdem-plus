@@ -196,6 +196,63 @@
   #last-hand-banner.visible { display: block; }
   #last-hand-banner .winners { color: var(--win); font-weight: 700; }
 
+  /* Hand history: a persistent per-hand log, distinct from the banner
+     above -- that banner only ever shows the single most recent hand and
+     gets replaced the moment the next one finishes. This panel keeps
+     every hand played at the table, each row expandable for the detail. */
+  details.history-panel > summary {
+    cursor: pointer;
+    list-style: none;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  details.history-panel > summary::-webkit-details-marker { display: none; }
+  details.history-panel > summary::before {
+    content: "▸";
+    display: inline-block;
+    color: var(--accent);
+    font-size: 0.75rem;
+    transition: transform 0.15s ease;
+  }
+  details.history-panel[open] > summary::before { transform: rotate(90deg); }
+  details.history-panel > summary:hover { color: var(--text); }
+  #hand-history-count { font-weight: 400; }
+
+  #hand-history-list { margin-top: 0.9rem; max-height: 360px; overflow-y: auto; }
+  .history-empty { color: var(--muted); font-size: 0.85rem; margin: 0; }
+  .history-entry {
+    border-top: 1px solid var(--panel-border);
+    padding: 0.55rem 0;
+  }
+  .history-entry:first-child { border-top: none; padding-top: 0; }
+  .history-entry > summary {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    font-size: 0.85rem;
+  }
+  .history-entry > summary::-webkit-details-marker { display: none; }
+  .history-hand-num { color: var(--muted); min-width: 4.5rem; }
+  .history-board { color: var(--muted); }
+  .history-winners { color: var(--win); font-weight: 600; }
+  .history-detail {
+    margin: 0.6rem 0 0.2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+  .history-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; font-size: 0.82rem; }
+  .history-label { color: var(--muted); min-width: 4.5rem; }
+  .history-cards { display: flex; gap: 0.2rem; }
+  .history-cards .card { width: 1.6rem; height: 2.2rem; font-size: 0.72rem; }
+
   #demo-teaser { border-color: var(--accent); }
   #demo-teaser h2 { color: var(--text); }
   #demo-teaser p { color: var(--muted); margin: 0 0 0.9rem; max-width: 60ch; }
@@ -343,6 +400,13 @@
       <h2>Table activity</h2>
       <div id="log"></div>
     </div>
+
+    <details class="panel history-panel" id="hand-history-panel" style="margin-top:1rem;">
+      <summary>Hand history <span id="hand-history-count"></span></summary>
+      <div id="hand-history-list">
+        <p class="history-empty">Hands will show up here as they're played.</p>
+      </div>
+    </details>
   </section>
 </main>
 
@@ -618,6 +682,7 @@ function render(state) {
   const hand = state.hand;
 
   renderLastHandBanner(state.last_hand);
+  updateHandHistoryCount(state);
 
   if (!hand) {
     document.getElementById("pot-line").textContent =
@@ -677,6 +742,7 @@ function renderLastHandBanner(lastHand) {
         });
         log(`Rabbit hunt: the river would have been ${result.river.join(", ")} (cost ${result.cost})`);
         pollState();
+        if (isHandHistoryOpen()) refreshHandHistory();
       } catch (e) { log("Error: " + e.message); }
     };
     banner.appendChild(btn);
@@ -687,10 +753,121 @@ function renderLastHandBanner(lastHand) {
   if (key !== lastShownHandKey) {
     log(`Hand complete: ${winners || "no payout"}`);
     lastShownHandKey = key;
+    if (isHandHistoryOpen()) refreshHandHistory();
   }
 }
 
 function shortId(pid) { return pid ? pid.slice(0, 6) : pid; }
+
+// ---------- Hand history ----------
+// Persistent per-hand log backed by GET /tables/{id}/hands (api.py).
+// Unlike renderLastHandBanner above -- which only ever shows the single
+// most recently finished hand and gets replaced the instant the next one
+// finishes -- this panel keeps every hand played at the table. The full
+// list is only fetched while the panel is open, or the moment it's
+// opened; a closed panel costs nothing beyond the running count, which
+// rides along on every /state response for free.
+
+function updateHandHistoryCount(state) {
+  const countEl = document.getElementById("hand-history-count");
+  if (countEl) countEl.textContent = `(${state.hands_completed || 0})`;
+}
+
+function isHandHistoryOpen() {
+  const panel = document.getElementById("hand-history-panel");
+  return !!(panel && panel.open);
+}
+
+async function refreshHandHistory() {
+  try {
+    const data = await api(`/tables/${tableId}/hands`);
+    renderHandHistory(data);
+  } catch (e) { /* table may not be ready yet -- leave the panel as-is */ }
+}
+
+function historyRow(label, valueEl) {
+  const row = document.createElement("div");
+  row.className = "history-row";
+  const labelSpan = document.createElement("span");
+  labelSpan.className = "history-label";
+  labelSpan.textContent = label;
+  row.appendChild(labelSpan);
+  row.appendChild(valueEl);
+  return row;
+}
+
+function historyCards(cardStrs) {
+  const span = document.createElement("span");
+  span.className = "history-cards";
+  cardStrs.forEach((c) => span.appendChild(renderCard(c)));
+  return span;
+}
+
+function renderHandHistory(data) {
+  const list = document.getElementById("hand-history-list");
+  list.innerHTML = "";
+  if (!data.hands.length) {
+    const empty = document.createElement("p");
+    empty.className = "history-empty";
+    empty.textContent = "Hands will show up here as they're played.";
+    list.appendChild(empty);
+    return;
+  }
+
+  data.hands.forEach((h) => {
+    const entry = document.createElement("details");
+    entry.className = "history-entry";
+
+    const summary = document.createElement("summary");
+    const numSpan = document.createElement("span");
+    numSpan.className = "history-hand-num";
+    numSpan.textContent = `Hand #${h.hand_number}`;
+    summary.appendChild(numSpan);
+
+    if (h.community_cards && h.community_cards.length) {
+      const boardSpan = document.createElement("span");
+      boardSpan.className = "history-board";
+      boardSpan.textContent = h.community_cards.join(" ");
+      summary.appendChild(boardSpan);
+    }
+
+    const winners = Object.entries(h.payouts || {})
+      .map(([pid, amt]) => `${shortId(pid)} +${amt}`).join(", ");
+    const winSpan = document.createElement("span");
+    winSpan.className = "history-winners";
+    winSpan.textContent = winners || "no payout";
+    summary.appendChild(winSpan);
+    entry.appendChild(summary);
+
+    const detail = document.createElement("div");
+    detail.className = "history-detail";
+
+    if (h.community_cards && h.community_cards.length) {
+      detail.appendChild(historyRow("Board", historyCards(h.community_cards)));
+    }
+    Object.entries(h.revealed_hands || {}).forEach(([pid, cards]) => {
+      detail.appendChild(historyRow(shortId(pid), historyCards(cards)));
+    });
+    if (h.folded_players && h.folded_players.length) {
+      const foldedSpan = document.createElement("span");
+      foldedSpan.textContent = h.folded_players.map(shortId).join(", ");
+      detail.appendChild(historyRow("Folded", foldedSpan));
+    }
+    if (h.rabbit_hunt) {
+      const rhSpan = document.createElement("span");
+      rhSpan.textContent = `${shortId(h.rabbit_hunt.player_id)} paid ${h.rabbit_hunt.cost} `
+        + `to see ${h.rabbit_hunt.river.join(", ")}`;
+      detail.appendChild(historyRow("Rabbit hunt", rhSpan));
+    }
+
+    entry.appendChild(detail);
+    list.appendChild(entry);
+  });
+}
+
+document.getElementById("hand-history-panel").addEventListener("toggle", (e) => {
+  if (e.target.open) refreshHandHistory();
+});
 
 function renderSeats(hand) {
   const container = document.getElementById("seats");
