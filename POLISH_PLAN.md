@@ -16,8 +16,8 @@ record of what happened.
 **Ground rule carried over from every session so far, stated bluntly
 because it keeps not happening:** nothing here is "done" until someone
 loads the actual deployed URL in a real browser and clicks through it.
-Three sessions in a row have shipped real, tested, working code and
-still not cleared that bar. Don't let phase 4 become a fourth.
+Several sessions in a row have shipped real, tested, working code and
+still not cleared that bar. Don't let the next phase become another one.
 
 ---
 
@@ -29,45 +29,59 @@ what's actually live (see `HANDOFF.md` Section 0 for a concrete instance
 of exactly that happening between two recent sessions). Closing that gap
 once, deliberately, is worth more than any single new feature.
 
-- [ ] Push this session's three changed files (`api.py`,
-      `test_api.py`, `static/index.html`) plus the two new docs
-      (`README.md` update, this file, the refreshed `HANDOFF.md`) to
-      `github.com/GameTech-Systems/holdem-plus`. No Claude sandbox in
-      this project's history has had push credentials — this step needs
-      a human. Given how the last few commits actually happened (GitHub
-      web UI "Add files via upload," not a git push), the fastest path
-      is probably the same: upload `static/index.html` into the
-      **`static/` folder specifically** — the repo's own history shows
-      this exact file was accidentally uploaded to the repo root once
-      already and had to be deleted and re-added correctly.
-- [ ] Confirm the Render service actually redeploys on push (check
+- [ ] Push the currently-pending session's changed files
+      (`api.py`, `test_api.py`, `static/index.html`, `README.md`, and
+      this file) to `github.com/GameTech-Systems/holdem-plus`. No Claude
+      sandbox in this project's history has had push credentials — this
+      step needs a human. Given how the last few commits actually
+      happened (GitHub web UI "Add files via upload," not a git push),
+      the fastest path is probably the same: upload `static/index.html`
+      into the **`static/` folder specifically** — the repo's own
+      history shows this exact file was accidentally uploaded to the
+      repo root once already and had to be deleted and re-added
+      correctly.
+- [x] ~~Confirm the Render service actually redeploys on push (check
       Render's dashboard for auto-deploy settings) or trigger a manual
-      deploy. Nothing in this repo's history confirms one way or the
-      other whether pushes to `main` currently reach
-      `https://holdem-plus-demo.onrender.com/app/` automatically.
+      deploy.~~ **Resolved:** confirmed directly by the person running
+      this project that Render auto-deploys on every push to `main` --
+      see `HANDOFF.md`'s "Deployment note from this session" section.
+      No manual deploy step needed once a push actually happens; the
+      remaining gap is purely "has anyone pushed yet" (previous
+      checkbox), not "will it go live once pushed."
 - [ ] Once deployed: load that URL in a real browser (not curl, not
       jsdom) and click through, at minimum: seat two browser tabs at a
       table, play a hand to completion, open the new "Hand history"
       panel and confirm it populates, use Rabbit Runner once and confirm
       it shows up both in the last-hand banner and in the history log,
-      and watch the scripted demo end to end. Fix anything that looks
-      wrong before telling anyone outside the project it's ready.
-- [ ] While there: decide the two standing open items from `HANDOFF.md`
-      Section 4 that don't need code —
-      the `TRADEMARKS.md` entity-naming mismatch ("GamingTech, LLC" vs.
-      "GameTech Systems"), and posting `welcome_message.md`'s content to
-      the GitHub Discussions thread (still just sitting as drafted text).
+      and watch the scripted demo end to end. As of the most recent
+      session this should also include: face a bet/raise as the
+      non-acting player and confirm its size is legible on the felt (not
+      just present in the API response), fold a hand and let the next
+      one play deep into its own board before checking that the
+      rabbit-hunt banner's wording still reads clearly at that point,
+      and open the demo's new "Hands played so far" panel after watching
+      both showcase hands. Fix anything that looks wrong before telling
+      anyone outside the project it's ready.
+- [ ] While there: decide the one remaining standing open item from
+      `HANDOFF.md` Section 4 that doesn't need code — the
+      `TRADEMARKS.md` entity-naming mismatch ("GamingTech, LLC" vs.
+      "GameTech Systems") — and post `welcome_message.md`'s content to
+      the GitHub Discussions thread (still just sitting as drafted text,
+      now across five sessions).
 
-**Definition of done:** the live URL genuinely reflects this session's
-work, someone has personally clicked through it, and the two docs-only
-open items are either resolved or explicitly deferred with a reason.
+**Definition of done:** the live URL genuinely reflects the most recent
+session's work, someone has personally clicked through it (including the
+new bet-visibility and demo-history items above), and the remaining
+docs-only open item is either resolved or explicitly deferred with a
+reason.
 
 ---
 
 ## Phase 1 — Hand-history follow-through
 
-The log itself shipped this session (`GET /tables/{id}/hands`, the
-collapsible panel in `static/index.html`, 12 new tests). What didn't:
+The log itself shipped several sessions ago (`GET /tables/{id}/hands`,
+the collapsible panel in `static/index.html`, tests in `test_api.py`).
+What didn't:
 
 - [ ] **Pagination in the UI.** The endpoint already accepts `limit`;
       the frontend always requests the default (50) and has no "load
@@ -81,8 +95,8 @@ collapsible panel in `static/index.html`, 12 new tests). What didn't:
       transient network blip), but the panel should show *something* if
       it's never successfully loaded at all, rather than sitting on the
       static "Hands will show up here" placeholder forever.
-- [ ] **Multi-way side-pot coverage.** Every hand-history test this
-      session used heads-up hands. The feature reuses `HandResult`
+- [ ] **Multi-way side-pot coverage.** Every hand-history test so far
+      has used heads-up hands. The feature reuses `HandResult`
       verbatim, so risk is low, but nothing specifically confirms a
       3+ way all-in with multiple side pots (`side_pots.compute_side_pots`
       producing more than one `Pot`) records and serializes correctly
@@ -106,10 +120,10 @@ hands" and "the fetch failed," and it's been seen working in a browser.
 
 ## Phase 2 — The third showcase hand (side pots)
 
-Flagged as an open decision in the prior `HANDOFF.md` (Section 4, item
-3) and still not built. Now that Phase 1 forces a rigged multi-way
-side-pot deck to exist anyway, this is a natural, low-marginal-cost
-follow-on rather than a separate investigation.
+Flagged as an open decision across several `HANDOFF.md`s now and still
+not built. Now that Phase 1 forces a rigged multi-way side-pot deck to
+exist anyway, this is a natural, low-marginal-cost follow-on rather than
+a separate investigation.
 
 - [ ] Build a third `DemoHand` in `demo_showcase.py`: 3–4 seats, one
       short stack forced all-in, at least one other player continuing
@@ -123,12 +137,14 @@ follow-on rather than a separate investigation.
       reveal staging, determinism).
 - [ ] `api.py` / `static/index.html`: `/demo/script` already returns a
       list, and the demo panel already iterates it generically — a third
-      entry should Just Work, but confirm the demo-seats layout
-      (`--demo-seat` flexbox) doesn't get cramped at 4 seats, and that
-      the narration makes the side-pot mechanic legible to someone who's
-      never seen one (this is the one place in the whole demo where a
-      plain-English explanation earns its keep more than a UI treatment
-      would).
+      entry should Just Work, including in the "Hands played so far"
+      history panel added this session (it's built generically off
+      whatever `demoScript` contains, not hardcoded to two hands) — but
+      confirm the demo-seats layout (`.demo-seat` flexbox) doesn't get
+      cramped at 4 seats, and that the narration makes the side-pot
+      mechanic legible to someone who's never seen one (this is the one
+      place in the whole demo where a plain-English explanation earns
+      its keep more than a UI treatment would).
 - [ ] Update `README.md`'s "Watch the demo" section and the teaser copy
       in `static/index.html` (`#demo-teaser p`) to mention three hands,
       not two.
@@ -143,11 +159,10 @@ it's been watched end-to-end in a real browser.
 
 `/tables/{id}/analytics` has returned real numbers (hands/hour, pot size
 in big blinds, showdown frequency, category distribution vs. a standard-
-Hold'em baseline, player feedback) since the analytics session, and
-nothing has ever displayed them anywhere a person would look. This is
-explicitly called out as a "longer-standing priority" in the prior
-`HANDOFF.md` (Section 5, item 6) and has been carried forward, unbuilt,
-across at least two sessions now.
+Hold'em baseline, player feedback) for several sessions now, and nothing
+has ever displayed them anywhere a person would look. This is explicitly
+called out as a "longer-standing priority" in more than one prior
+`HANDOFF.md` and has been carried forward, unbuilt, the whole time.
 
 - [ ] A read-only panel or separate page (`static/analytics.html`, or a
       tab within the existing page — either is fine, pick based on how

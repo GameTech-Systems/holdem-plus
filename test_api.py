@@ -1094,6 +1094,110 @@ def test_hand_history_reflects_rabbit_hunt_used_over_websocket():
     assert entry["rabbit_hunt"]["player_id"] == folder
 
 
+# ---------------------------------------------------------------------------
+# Bet visibility (see HANDOFF.md's "opponent can't see the bet size" report)
+#
+# Previously the live hand payload never exposed how much had actually
+# been bet -- an opponent facing a raise saw CALL/RAISE/FOLD buttons with
+# no indication of the size of any of them unless they'd watched the
+# whole street play out live themselves. These tests cover the fix:
+# current_bet and pot_total on the hand payload, and bet_this_street per
+# player, visible to every viewer (not just the current actor), since
+# chips in front of a player are public information at a real table.
+# ---------------------------------------------------------------------------
+
+def test_live_hand_reports_current_bet_and_pot_total_preflop():
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    state = client.get(f"/tables/{table_id}/state").json()
+    # heads-up: sb=1, bb=2 already posted -- current bet to match preflop
+    # is the big blind, and the pot so far is just those two blinds.
+    assert state["hand"]["current_bet"] == 2
+    assert state["hand"]["pot_total"] == 3
+
+
+def test_bet_amount_is_visible_to_the_non_acting_player():
+    """
+    Regression test for the reported bug: a player who is NOT currently
+    acting must still be able to see the size of a bet/raise that was
+    just made against them -- both the street's current_bet and the
+    actor's own bet_this_street -- not just fold/call/raise buttons.
+    """
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    state = client.get(f"/tables/{table_id}/state").json()
+    actor = state["hand"]["current_actor"]
+    non_actor = p1 if actor == p0 else p0
+
+    # heads-up preflop: button/SB acts first and can legally raise.
+    resp = client.post(
+        f"/tables/{table_id}/actions",
+        json={"player_id": actor, "action_type": "RAISE", "amount": 20},
+    )
+    assert resp.status_code == 200
+
+    non_actor_state = client.get(f"/tables/{table_id}/state", params={"player_id": non_actor}).json()
+    assert non_actor_state["hand"]["current_bet"] == 20
+    actor_entry = next(p for p in non_actor_state["hand"]["players"] if p["player_id"] == actor)
+    assert actor_entry["bet_this_street"] == 20
+
+
+def test_bet_this_street_resets_between_streets():
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    # close out preflop with calls/checks so we land on flop betting
+    _check_or_call_current_actor(table_id)
+    _check_or_call_current_actor(table_id)
+
+    state = client.get(f"/tables/{table_id}/state").json()
+    if state["hand"] is not None:  # guard against an unlikely heads-up bust
+        for p in state["hand"]["players"]:
+            assert p["bet_this_street"] == 0
+        # but the pot still reflects everything committed on earlier streets
+        assert state["hand"]["pot_total"] > 0
+
+
+# ---------------------------------------------------------------------------
+# last_hand hand_number (see _serialize_hand_result's docstring)
+#
+# Lets the client label the "last hand" banner and any rabbit-hunt offer
+# riding along with it unambiguously (e.g. "Hand #6"), cross-referenced
+# against the same numbering used in the persistent /tables/{id}/hands
+# log -- since that banner can stay visible for the ENTIRE next hand's
+# duration by design, it's easy to mistake for describing the hand
+# currently on screen without this.
+# ---------------------------------------------------------------------------
+
+def test_last_hand_includes_a_stable_hand_number():
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    _play_to_first_hand_completion(table_id)
+    state = client.get(f"/tables/{table_id}/state").json()
+    assert state["last_hand"]["hand_number"] == 1
+    assert state["hands_completed"] == 1
+
+    _play_until_hands_completed(table_id, 2)
+    state = client.get(f"/tables/{table_id}/state").json()
+    if state["last_hand"] is not None:  # heads-up bust could end the tournament
+        assert state["last_hand"]["hand_number"] == 2
+
+
 def test_hand_history_storage_is_capped_but_lifetime_count_is_not(monkeypatch):
     """
     MAX_HAND_HISTORY bounds how many entries are *retained*, but

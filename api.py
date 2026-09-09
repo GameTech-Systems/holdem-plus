@@ -42,7 +42,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from analytics import AnalyticsLog, build_hand_record, simulate_standard_holdem_baseline
-from betting_state_machine import ActionType, IllegalActionError
+from betting_state_machine import ActionType, BETTING_STREETS, IllegalActionError
 from demo_showcase import build_demo_script, serialize_demo_script
 from orchestrator import Hand, HandResult, OrchestratorError, Tournament
 from poker_types import Card
@@ -365,6 +365,7 @@ def _serialize_hand_result(
     result: HandResult,
     hand: Optional[Hand],
     viewer_player_id: Optional[str],
+    hand_number: Optional[int] = None,
 ) -> dict:
     """Serializes a *finished* hand's outcome for the 'last_hand' field --
     same card-stringification convention as the live 'hand' payload
@@ -379,6 +380,20 @@ def _serialize_hand_result(
     home for that flag: it was previously computed against whatever hand
     happened to be *currently* in progress, which (per HANDOFF.md Bug 3)
     is never the hand this eligibility question is actually about.
+
+    `hand_number` (session.hands_completed at the moment this result was
+    recorded -- see _record_hand_history_entry, which increments the
+    same counter this value is read from at exactly the point
+    last_hand_result is set) lets the client unambiguously label which
+    hand this is, e.g. "Hand #6 (previous)". This matters because
+    last_hand_result -- and any rabbit-hunt offer riding along with it --
+    stays visible for the ENTIRE next hand's duration, by design (see
+    TableSession.last_completed_hand's docstring): a viewer can otherwise
+    easily mistake a still-live rabbit-hunt offer for the hand currently
+    on their screen, especially once that live hand's own board has
+    filled up to 5 cards. Cross-referencing against the same hand_number
+    shown in the persistent /tables/{id}/hands log removes that
+    ambiguity instead of changing the underlying eligibility window.
     """
     rabbit_hunt_eligible = (
         hand is not None
@@ -387,6 +402,7 @@ def _serialize_hand_result(
         and viewer_player_id not in hand.rabbit_hunts
     )
     return {
+        "hand_number": hand_number,
         "is_complete": True,
         "payouts": dict(result.payouts),
         "community_cards": [str(c) for c in result.community_cards],
@@ -440,7 +456,10 @@ def _serialize_state(session: TableSession, viewer_player_id: Optional[str]) -> 
         "hands_completed": session.hands_completed,
         "last_hand": (
             _serialize_hand_result(
-                session.last_hand_result, session.last_completed_hand, viewer_player_id
+                session.last_hand_result,
+                session.last_completed_hand,
+                viewer_player_id,
+                session.hands_completed,
             )
             if session.last_hand_result is not None
             else None
@@ -469,11 +488,35 @@ def _serialize_state(session: TableSession, viewer_player_id: Optional[str]) -> 
             "all_in": p.all_in,
             "hole_card_count": len(p.hole_cards),
             "hole_cards": [str(c) for c in p.hole_cards] if show_cards else None,
+            # How much this player has put in on the CURRENT street --
+            # public information at a real table (chips are visibly in
+            # front of each player), so it's shown to every viewer, not
+            # just the player themselves. Previously omitted entirely:
+            # an opponent facing a bet only ever saw CALL/RAISE/FOLD
+            # buttons with no indication of what they'd actually be
+            # calling, which is only usable if you already know the size
+            # from having watched the whole street play out live.
+            "bet_this_street": p.committed_this_street,
         })
 
     legal_actions: List[str] = []
     if viewer_player_id and not hand.is_complete and viewer_player_id == hand.current_actor_id:
         legal_actions = [a.name for a in hand.legal_actions(viewer_player_id)]
+
+    # current_bet mirrors the same street/round gating Hand.current_actor_id
+    # already uses -- 0 once the hand is complete or between streets,
+    # otherwise the amount every player on this street needs to match.
+    round_ = hand.flow.current_round
+    current_bet = (
+        round_.current_bet
+        if round_ is not None and hand.flow.street in BETTING_STREETS
+        else 0
+    )
+    # Running total of everything committed to the pot so far this hand
+    # (every street, not just the current one) -- the number a player
+    # actually wants to see next to "current bet," since "what do I need
+    # to call" and "what am I playing for" are different questions.
+    pot_total = sum(p.committed_total for p in hand.player_states)
 
     payload["hand"] = {
         "small_blind": hand.small_blind,
@@ -484,6 +527,8 @@ def _serialize_state(session: TableSession, viewer_player_id: Optional[str]) -> 
         "legal_actions": legal_actions,
         "is_complete": hand.is_complete,
         "payouts": hand.result.payouts if hand.is_complete else None,
+        "current_bet": current_bet,
+        "pot_total": pot_total,
     }
     return payload
 

@@ -25,7 +25,7 @@ demo_showcase.py            two scripted, deterministic showcase hands for
                              the public demo landing page (GET /demo/script)
 api.py                      REST + WebSocket layer over the orchestrator
 example_usage.py            runnable script showing the orchestrator API
-test_*.py                   218 tests, pytest
+test_*.py                   222 tests, pytest
 requirements.txt            fastapi / uvicorn / pydantic / pytest / httpx
 Dockerfile, .dockerignore   container image (Fly.io / Railway / Render-Docker)
 render.yaml                 Render Blueprint (native Python runtime)
@@ -35,17 +35,17 @@ DEPLOYMENT.md                step-by-step deploy instructions for all three
 ```
 
 Every module above the API layer is dependency-free standard-library
-Python. All 218 tests pass as of this handoff (206 prior + 12 added this
-session for the hand-history log -- see `HANDOFF.md` for the full
-rundown, and for what shipped in earlier sessions: the demo landing
-page, the analytics/instrumentation layer, the real-time blind-clock
-fix, and so on).
+Python. All 222 tests pass as of this handoff (218 prior + 4 added this
+session for live bet/pot visibility and the "last hand" banner's hand
+number -- see `HANDOFF.md` for the full rundown, and for what shipped in
+earlier sessions: the hand-history log, the demo landing page, the
+analytics/instrumentation layer, the real-time blind-clock fix, and so on).
 
 ## Running it
 
 ```bash
 pip install -r requirements.txt
-pytest -q                        # 218 passed
+pytest -q                        # 222 passed
 python3 example_usage.py         # orchestrator demo, no network
 uvicorn api:app --reload         # real server on http://127.0.0.1:8000
 ```
@@ -55,7 +55,9 @@ With the server running, interactive API docs are at
 useful for poking at endpoints by hand before wiring up a frontend.
 
 To put this on a real, shareable URL instead of just running it locally,
-see `DEPLOYMENT.md`.
+see `DEPLOYMENT.md`. Render auto-deploys on every push to `main` --
+confirmed directly by the person running this project, so Phase 0's
+open question in `POLISH_PLAN.md` about that is resolved.
 
 ## Quick manual walkthrough
 
@@ -88,7 +90,11 @@ for live push updates instead of polling `/state`.
 reachable with only 2) and "Rabbit Runner" (a turn fold, then a paid
 peek at the river that would have come) -- and `static/index.html`
 animates them on a "Watch the demo" button on the landing page, no
-guest/table/join required.
+guest/table/join required. As of this session, the demo panel also keeps
+a collapsible "Hands played so far" log of every showcase hand watched in
+the current run-through (title, final board, payout, and the full
+play-by-play), so the first hand's narration no longer disappears the
+moment the second one starts playing.
 
 This exists because both features are easy to miss by just clicking
 around: the 3rd hole card only visibly matters when it changes a hand's
@@ -117,6 +123,14 @@ actually looking back at what happened, and `static/index.html` renders
 it as a collapsible "Hand history" panel, each hand further expandable
 for the detail, fetched lazily only while the panel is open.
 
+`last_hand` (both on `/state` and pushed over the WebSocket) now also
+carries a `hand_number`, cross-referencing the same numbering shown in
+this log -- see `HANDOFF.md` for why that matters: the "last hand"
+banner and any Rabbit Runner offer riding along with it stay visible for
+the *entire* next hand's duration by design, so labeling exactly which
+hand they refer to (rather than just "Last hand:") matters once that
+next hand's own board has also filled up to 5 cards.
+
 ## Analytics / instrumentation
 
 `GET /tables/<table_id>/analytics` returns hands/hour, average pot size
@@ -127,6 +141,18 @@ plan's Section 3.3 hypothesis-testing actually depends on (see
 `analytics.py` and `HANDOFF.md`). `POST /tables/<table_id>/feedback`
 with `{"player_id": "...", "thumbs_up": true}` records the lightweight
 player-reported-excitement signal from the same section.
+
+## Live bet visibility
+
+The live `hand` payload (`GET /state` and the WebSocket push) includes
+`current_bet` (what everyone on the current street needs to match),
+`pot_total` (everything committed to the pot so far this hand, across
+every street), and each player's own `bet_this_street` -- all public
+information at a real table, visible to every viewer, not just the
+player currently acting. Before this session, a player facing a bet or
+raise only ever saw CALL/RAISE/FOLD buttons with no indication of the
+actual size of any of them unless they'd watched the whole street play
+out live themselves; see `HANDOFF.md` for the fix.
 
 ## Known scope limits
 
