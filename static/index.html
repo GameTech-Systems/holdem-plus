@@ -156,6 +156,7 @@
   .seat.folded { opacity: 0.4; }
   .seat .name { font-weight: 600; margin-bottom: 0.15rem; }
   .seat .stack { color: var(--muted); }
+  .seat .bet { color: var(--accent); font-weight: 600; }
   .seat .cards { display: flex; gap: 0.2rem; margin-top: 0.3rem; }
   .seat .cards .card { width: 1.5rem; height: 2.1rem; font-size: 0.7rem; }
   .badge {
@@ -314,6 +315,8 @@
 
   .demo-controls { display: flex; gap: 0.6rem; margin-top: 1rem; flex-wrap: wrap; }
   .demo-done { color: var(--muted); margin-top: 0.8rem; }
+
+  #demo-history-panel { margin-top: 1rem; border-top: 1px solid var(--panel-border); padding-top: 0.9rem; }
 </style>
 </head>
 <body>
@@ -345,6 +348,12 @@
     <div class="demo-controls">
       <button class="secondary" id="btn-skip-demo-hand">Skip ahead</button>
     </div>
+    <details class="history-panel" id="demo-history-panel">
+      <summary>Hands played so far <span id="demo-history-count"></span></summary>
+      <div id="demo-history-list">
+        <p class="history-empty">Finished showcase hands will show up here as they play.</p>
+      </div>
+    </details>
   </section>
 
   <section class="panel" id="setup-panel">
@@ -448,6 +457,7 @@ async function api(path, opts = {}) {
 let demoScript = null;
 let demoAbortToken = 0;
 let demoSkipCurrentHand = false;
+let demoHandHistory = [];
 
 document.getElementById("btn-watch-demo").onclick = async () => {
   const myToken = ++demoAbortToken;
@@ -482,6 +492,8 @@ function demoSleep(ms) {
 
 async function playDemoScript(token) {
   const logEl = document.getElementById("demo-log");
+  demoHandHistory = [];
+  renderDemoHandHistory();
   for (const hand of demoScript) {
     if (token !== demoAbortToken) return;
     demoSkipCurrentHand = false;
@@ -496,6 +508,16 @@ async function playDemoScript(token) {
       await demoSleep(event.highlight ? 2400 : 1350);
     }
     if (token !== demoAbortToken) return;
+
+    // Archive this hand into the demo's own hand-history panel before
+    // moving to the next one -- mirrors the real table's persistent
+    // /tables/{id}/hands log, so a finished showcase hand's narration
+    // doesn't just vanish once the next hand starts playing (see
+    // HANDOFF.md: the demo's first hand used to disappear completely
+    // the moment hand 2 began, with no way back to it).
+    demoHandHistory.push(hand);
+    renderDemoHandHistory();
+
     await demoSleep(1800);
   }
   if (token !== demoAbortToken) return;
@@ -550,6 +572,96 @@ function renderDemoEvent(event) {
   line.textContent = event.narration;
   logEl.appendChild(line);
   logEl.scrollTop = logEl.scrollHeight;
+}
+
+// ---------- Demo hand history ----------
+// A persistent log of showcase hands played during THIS "Watch the demo"
+// run-through, distinct from #demo-log above the same way the real
+// table's hand-history panel is distinct from its "last hand" banner --
+// #demo-log only ever shows the hand currently animating and gets wiped
+// the moment the next one starts. Every DemoHand's `events` array is
+// already fully known up front (nothing here re-fetches anything), so
+// archiving a finished hand is just keeping a reference to it.
+function renderDemoHandHistory() {
+  const list = document.getElementById("demo-history-list");
+  const countEl = document.getElementById("demo-history-count");
+  if (countEl) countEl.textContent = demoHandHistory.length ? `(${demoHandHistory.length})` : "";
+  list.innerHTML = "";
+  if (!demoHandHistory.length) {
+    const empty = document.createElement("p");
+    empty.className = "history-empty";
+    empty.textContent = "Finished showcase hands will show up here as they play.";
+    list.appendChild(empty);
+    return;
+  }
+
+  demoHandHistory.forEach((hand, idx) => {
+    const resultEvent = hand.events.find((e) => e.kind === "hand_result");
+    const rabbitEvent = hand.events.find((e) => e.kind === "rabbit_hunt");
+
+    const entry = document.createElement("details");
+    entry.className = "history-entry";
+
+    const summary = document.createElement("summary");
+    const numSpan = document.createElement("span");
+    numSpan.className = "history-hand-num";
+    numSpan.textContent = `Hand ${idx + 1}`;
+    summary.appendChild(numSpan);
+
+    const titleSpan = document.createElement("span");
+    titleSpan.className = "history-board";
+    titleSpan.textContent = hand.title;
+    summary.appendChild(titleSpan);
+
+    if (resultEvent) {
+      const winners = Object.entries(resultEvent.payouts || {})
+        .map(([pid, amt]) => `${pid} +${amt}`).join(", ");
+      const winSpan = document.createElement("span");
+      winSpan.className = "history-winners";
+      winSpan.textContent = winners || "no payout";
+      summary.appendChild(winSpan);
+    }
+    entry.appendChild(summary);
+
+    const detail = document.createElement("div");
+    detail.className = "history-detail";
+
+    if (resultEvent && resultEvent.community_cards.length) {
+      detail.appendChild(historyRow("Board", historyCards(resultEvent.community_cards)));
+    }
+    (resultEvent ? resultEvent.players : []).forEach((p) => {
+      if (p.hole_cards && p.hole_cards.length) {
+        detail.appendChild(historyRow(p.player_id, historyCards(p.hole_cards)));
+      }
+    });
+    if (rabbitEvent) {
+      const rhSpan = document.createElement("span");
+      rhSpan.textContent = rabbitEvent.narration;
+      detail.appendChild(historyRow("Rabbit hunt", rhSpan));
+    }
+
+    const transcriptLabelRow = document.createElement("div");
+    transcriptLabelRow.className = "history-row";
+    const transcriptLabel = document.createElement("span");
+    transcriptLabel.className = "history-label";
+    transcriptLabel.textContent = "Play-by-play";
+    transcriptLabelRow.appendChild(transcriptLabel);
+    detail.appendChild(transcriptLabelRow);
+
+    const transcript = document.createElement("div");
+    transcript.className = "demo-log";
+    transcript.style.maxHeight = "220px";
+    hand.events.forEach((e) => {
+      const line = document.createElement("div");
+      line.className = "demo-line" + (e.highlight ? " highlight" : "");
+      line.textContent = e.narration;
+      transcript.appendChild(line);
+    });
+    detail.appendChild(transcript);
+
+    entry.appendChild(detail);
+    list.appendChild(entry);
+  });
 }
 
 document.getElementById("btn-new-table").onclick = async () => {
@@ -695,9 +807,9 @@ function render(state) {
   (hand.community_cards || []).forEach((c) => communityEl.appendChild(renderCard(c)));
 
   if (hand.is_complete) {
-    document.getElementById("pot-line").textContent = "Hand complete.";
+    document.getElementById("pot-line").textContent = `Hand complete. Pot: ${hand.pot_total}`;
   } else {
-    document.getElementById("pot-line").textContent = `Blinds ${hand.small_blind}/${hand.big_blind}`;
+    document.getElementById("pot-line").textContent = `Blinds ${hand.small_blind}/${hand.big_blind} · Pot: ${hand.pot_total}`;
   }
 
   renderSeats(hand);
@@ -712,16 +824,18 @@ function renderLastHandBanner(lastHand) {
     return;
   }
 
-  // Key on the payouts + community cards so we only log a given
-  // completed hand once, even though `last_hand` stays present on
-  // every subsequent state push until the next hand finishes.
-  const key = JSON.stringify([lastHand.payouts, lastHand.community_cards]);
+  // Key on the hand number (falls back to payouts + board if it's ever
+  // missing) so we only log a given completed hand once, even though
+  // `last_hand` stays present on every subsequent state push until the
+  // next hand finishes.
+  const key = JSON.stringify([lastHand.hand_number, lastHand.payouts, lastHand.community_cards]);
 
   const winners = Object.entries(lastHand.payouts || {})
     .map(([pid, amt]) => `${shortId(pid)} +${amt}`).join(", ");
-  banner.innerHTML = `Last hand: <span class="winners">${winners || "no payout"}</span>`
+  const label = lastHand.hand_number ? `Hand #${lastHand.hand_number} (previous)` : "Previous hand";
+  banner.innerHTML = `${label}: <span class="winners">${winners || "no payout"}</span>`
     + (lastHand.community_cards && lastHand.community_cards.length
-        ? ` — board: ${lastHand.community_cards.join(" ")}` : "");
+        ? ` — that hand's board: ${lastHand.community_cards.join(" ")}` : "");
 
   // Rabbit hunt lives here now, not in the live action bar: by the time
   // a hand is ever complete, the next hand has already been dealt (the
@@ -729,10 +843,18 @@ function renderLastHandBanner(lastHand) {
   // reflects is never the one you'd be rabbit-hunting on. last_hand's
   // own rabbit_hunt_eligible is scoped to whoever is asking (this
   // viewer) and to specifically this most-recently-finished hand.
+  //
+  // This offer deliberately stays visible for the entire NEXT hand's
+  // duration too (see HANDOFF.md) -- you get a full hand's worth of time
+  // to decide, not just a moment. That means it can still be showing
+  // here even once the live hand below has itself run all the way to a
+  // 5-card board, which reads as confusing without the explicit "this is
+  // the finished hand, not the one below" callout underneath the button.
   if (lastHand.rabbit_hunt_eligible) {
     const btn = document.createElement("button");
     btn.className = "secondary";
-    btn.textContent = "Rabbit hunt";
+    btn.textContent = "Rabbit hunt that fold";
+    btn.title = "Reveals the river from the previous hand -- not the hand in progress below.";
     btn.style.marginLeft = "0.6rem";
     btn.onclick = async () => {
       try {
@@ -746,12 +868,18 @@ function renderLastHandBanner(lastHand) {
       } catch (e) { log("Error: " + e.message); }
     };
     banner.appendChild(btn);
+
+    const clarify = document.createElement("div");
+    clarify.className = "hint";
+    clarify.style.marginTop = "0.35rem";
+    clarify.textContent = "This is the hand that just finished -- not the one in progress below.";
+    banner.appendChild(clarify);
   }
 
   banner.classList.add("visible");
 
   if (key !== lastShownHandKey) {
-    log(`Hand complete: ${winners || "no payout"}`);
+    log(`Hand ${lastHand.hand_number ? "#" + lastHand.hand_number + " " : ""}complete: ${winners || "no payout"}`);
     lastShownHandKey = key;
     if (isHandHistoryOpen()) refreshHandHistory();
   }
@@ -910,6 +1038,17 @@ function renderSeats(hand) {
     stack.textContent = `Stack: ${p.stack}`;
     seat.appendChild(stack);
 
+    // Chips currently in front of this player on the live street --
+    // public information at a real table, so it's shown for every seat,
+    // not just your own (see HANDOFF.md: previously an opponent facing a
+    // bet had no way to see its size, only fold/call/raise buttons).
+    if (p.bet_this_street) {
+      const bet = document.createElement("div");
+      bet.className = "bet";
+      bet.textContent = `Bet: ${p.bet_this_street}`;
+      seat.appendChild(bet);
+    }
+
     const cards = document.createElement("div");
     cards.className = "cards";
     if (p.hole_cards) {
@@ -939,14 +1078,21 @@ function renderActions(hand) {
     return;
   }
 
+  const me = (hand.players || []).find((p) => p.player_id === playerId);
+  const myBet = me ? me.bet_this_street : 0;
+  const toCall = Math.max(0, (hand.current_bet || 0) - myBet);
+  const betNote = hand.current_bet
+    ? ` Current bet: ${hand.current_bet}${toCall ? ` (${toCall} to call)` : ""}.`
+    : "";
+
   if (hand.current_actor !== playerId) {
-    hint.textContent = hand.current_actor
+    hint.textContent = (hand.current_actor
       ? `Waiting on ${shortId(hand.current_actor)}...`
-      : "Waiting...";
+      : "Waiting...") + betNote;
     return;
   }
 
-  hint.textContent = "Your turn.";
+  hint.textContent = "Your turn." + betNote;
   const legal = hand.legal_actions || [];
   const amountInput = document.createElement("input");
   amountInput.type = "number";
@@ -955,9 +1101,10 @@ function renderActions(hand) {
 
   legal.forEach((actionType) => {
     const btn = document.createElement("button");
-    btn.textContent = actionType.replace("_", " ").toLowerCase();
+    let label = actionType.replace("_", " ").toLowerCase();
+    if (actionType === "CALL" && toCall) label = `call ${toCall}`;
+    btn.textContent = label;
     if (actionType === "FOLD") btn.className = "danger";
-    if (actionType === "CHECK" || actionType === "CALL") btn.className = "";
     if (actionType === "BET" || actionType === "RAISE") {
       btn.onclick = () => sendAction(actionType, parseInt(amountInput.value || "0", 10));
     } else {
