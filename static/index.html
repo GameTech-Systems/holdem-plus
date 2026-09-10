@@ -261,11 +261,12 @@
   #demo-panel .demo-head {
     display: flex;
     justify-content: space-between;
-    align-items: baseline;
+    align-items: center;
     gap: 1rem;
     flex-wrap: wrap;
   }
   #demo-panel .demo-head h2 { margin: 0; }
+  #demo-panel .demo-head-buttons { display: flex; gap: 0.6rem; flex-wrap: wrap; }
   #demo-panel .demo-summary { color: var(--muted); margin: 0.2rem 0 1rem; }
 
   .demo-seats {
@@ -313,7 +314,6 @@
   }
   @keyframes demo-line-in { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
 
-  .demo-controls { display: flex; gap: 0.6rem; margin-top: 1rem; flex-wrap: wrap; }
   .demo-done { color: var(--muted); margin-top: 0.8rem; }
 
   #demo-history-panel { margin-top: 1rem; border-top: 1px solid var(--panel-border); padding-top: 0.9rem; }
@@ -332,22 +332,22 @@
     <h2>New here?</h2>
     <p>Watch two hands play out on their own: one shows what the 3rd hole card
        actually does to a hand, the other shows the Rabbit Runner option —
-       paying to see the river you'd have faced after folding.</p>
+       pay to reveal the river when a fold ends the hand before it's shown.</p>
     <button class="secondary" id="btn-watch-demo">▶ Watch the demo</button>
   </section>
 
   <section class="panel" id="demo-panel" style="display:none;">
     <div class="demo-head">
       <h2 id="demo-hand-title">Demo</h2>
-      <button class="secondary" id="btn-exit-demo">Exit demo</button>
+      <div class="demo-head-buttons">
+        <button class="secondary" id="btn-skip-demo-hand">Skip ahead</button>
+        <button class="secondary" id="btn-exit-demo">Exit demo</button>
+      </div>
     </div>
     <p class="demo-summary" id="demo-hand-summary"></p>
     <div class="community-cards" id="demo-community"></div>
     <div class="demo-seats" id="demo-seats"></div>
     <div class="demo-log" id="demo-log"></div>
-    <div class="demo-controls">
-      <button class="secondary" id="btn-skip-demo-hand">Skip ahead</button>
-    </div>
     <details class="history-panel" id="demo-history-panel">
       <summary>Hands played so far <span id="demo-history-count"></span></summary>
       <div id="demo-history-list">
