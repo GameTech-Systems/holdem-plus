@@ -77,6 +77,127 @@ reason.
 
 ---
 
+## Phase 0.5 — Hand reveal & showdown sequence (new top priority)
+
+**Added from direct product feedback; read this before touching Phase 1
+below — this jumps the queue.** Reported after watching real play: when
+a hand resolves with no further betting decisions possible (the most
+common case: both players shove preflop), `Hand._progress()` (see
+`orchestrator.py`) races through every remaining street inside the same
+request that triggered it, and calls `_finalize()` before control ever
+returns to the caller. The API response the client gets back already
+has the finished hand's payouts and a full 5-card board — there is no
+moment at which a flop reveal, a 3rd-hole-card reveal, a turn reveal, or
+a river reveal is its own event a viewer can actually watch happen.
+Right now the only way to reconstruct what happened is to open the
+table-activity log or the hand-history panel after the fact. Every real-
+money and most play-money poker clients pace this out (hole cards flip
+up, then each street turns with a beat in between, then a showdown
+highlight) precisely because that pacing *is* the moment of drama in an
+all-in pot — jumping straight to the result is a genuinely worse
+experience, not a cosmetic nicety.
+
+The full sequence asked for, matching `STREET_ORDER` exactly: all-in
+players' hole cards revealed -> beat -> flop -> beat -> 3rd hole card ->
+beat -> turn -> beat -> river -> a showdown beat that names each
+revealed hand (e.g. "Two Pair, Jacks and Fours") and visually marks the
+winner against what everyone else had. The same request also asks for
+that showdown beat on *every* hand that reaches a real showdown, not
+just fast-forwarded all-ins — that half doesn't depend on the
+fast-forward problem at all and is the smaller, standalone piece (0.5b
+below).
+
+### Does this call for the PokerTH fork (Phase 4+)? No.
+
+Direct answer to the question raised alongside this feedback: build
+this on the current custom client, don't treat it as a reason to start
+the fork.
+
+- The fork question (Phase 4+ below) is about replacing the *entire*
+  table UI with a battle-tested, general-purpose Hold'em client. That's
+  a real option for the felt, seating, and betting controls, which
+  genuinely are generic Hold'em concerns PokerTH's client already
+  solves well.
+- This specific gap isn't generic, though. The reason it needs a 3rd-
+  hole-card beat in the middle of the runout — the reason a standard
+  7-card Hold'em client's reveal animation has never had to represent
+  this sequence at all — is Hold'em Plus's own rule. Forking PokerTH's
+  web client would still mean writing this exact sequencing logic from
+  scratch inside that fork's reveal code; it doesn't pre-exist anywhere
+  to inherit. Forking trades one set of custom code for a different set
+  of custom code, on top of a real integration project (PokerTH speaks
+  its own network protocol; see the tech plan's Section 3.2) and the
+  AGPL/GPL licensing review `LICENSE`/`TRADEMARKS.md` already flag for
+  that path.
+- Given that, doing this on the existing client is strictly less total
+  work for this specific feature, and doesn't foreclose forking later
+  for the broader UI overhaul Phase 4+ already describes on its own
+  terms.
+
+### Design
+
+Keep `Hand`'s resolution instant and authoritative — do not introduce
+artificial delays or pauses into `HandFlow`/`BettingRound`, both
+deliberately synchronous, fully-tested state machines this project
+treats as audited (see their own module docstrings on why side-pot and
+betting-legality bugs get extra scrutiny here). Instead, have `Hand`
+record what already happened at each street transition into a new,
+purely-descriptive log, and let the *client* animate through that log
+at its own pace after the fact:
+
+- **0.5a (backend, no frontend work):** add a `RunoutStep` dataclass and
+  a `Hand.runout: List[RunoutStep]` field. Every time
+  `_handle_dealing_for()` runs — i.e. on every street transition, not
+  just fast-forwarded ones, so the frontend never needs two code paths —
+  append a step capturing the street, `community_cards` as of that step,
+  and, only from the moment no further betting action is possible
+  (`all(p.all_in or p.folded for p in the active players)`), each
+  remaining active player's hole cards (so an all-in reveal shows hands
+  turned up before the board runs out, matching a live table). Thread
+  `runout` through `HandResult` so `api.py` can serialize it onto both
+  `last_hand` and `HandHistoryEntry` — it costs nothing for a normally-
+  paced hand (the client already saw each state live) but is exactly
+  the missing information for a fast-forwarded one. New tests in
+  `test_orchestrator.py`: an all-in-preflop runout has one step per
+  street with the right community-card counts and both hole-card sets
+  exposed from the first step onward; a hand that never goes all-in
+  still produces a step per street; a hand that ends by fold before
+  showdown stops its runout at the fold, with no fabricated steps past
+  it.
+- **0.5b (showdown hand descriptions — smaller, stands alone):** compute
+  each revealed hand's category/description
+  (`hand_evaluator.evaluate_best_of` already returns this; it just isn't
+  surfaced anywhere) and add it next to each revealed hand at showdown,
+  with the winning hand(s) visually marked, in both the live felt and
+  the hand-history panel. Useful on its own even before 0.5a/0.5c land.
+- **0.5c (frontend, needs 0.5a):** in `static/index.html`, when a hand's
+  `last_hand` arrives with more runout steps than the client actually
+  observed live (exactly the fast-forwarded case), play them back on the
+  felt with a short pause between each — hole cards for any all-in
+  player(s) first, then each community-card stage — before settling into
+  the existing "hand complete" state. A normally-paced hand has nothing
+  new to animate, so this never fires for it. Verify with the same
+  jsdom-scaffold discipline this project already uses for frontend work
+  (see `HANDOFF.md`), and this is the one part of this phase that
+  genuinely needs the real-browser click-through, not just tests.
+
+### Suggested split
+
+Bigger than one session at this project's own ~5-hour sizing (see this
+document's intro). 0.5a (engine + tests, no UI) is a reasonable first
+session on its own; 0.5b is small enough to ride along with 0.5a or be
+its own short session; 0.5c is its own session once 0.5a exists to
+consume.
+
+**Definition of done:** an all-in preflop hand, watched live in a real
+browser, visibly reveals hole cards, then flop, then 3rd hole card, then
+turn, then river, each with a pause, before landing on a showdown that
+names and highlights the winning hand against what everyone else had —
+matching the sequence in this phase's originating feedback exactly, not
+a paraphrase of it.
+
+---
+
 ## Phase 1 — Hand-history follow-through
 
 The log itself shipped several sessions ago (`GET /tables/{id}/hands`,

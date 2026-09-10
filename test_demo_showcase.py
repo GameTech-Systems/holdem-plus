@@ -63,21 +63,21 @@ def test_extra_card_showcase_board_is_revealed_in_three_stages():
 # Showcase hand 2: "Rabbit Runner"
 # ---------------------------------------------------------------------------
 
-def test_rabbit_hunt_showcase_rio_folds_on_the_turn():
+def test_rabbit_hunt_showcase_sam_folds_on_the_turn():
     demo = _build_rabbit_hunt_showcase()
     fold_events = [e for e in demo.events if e.action == "FOLD"]
     assert len(fold_events) == 1
-    assert fold_events[0].actor == "Rio"
+    assert fold_events[0].actor == "Sam"
     # the fold happens right after the turn reveal (4 community cards), not
     # after a 5th (river) has been shown -- confirms this is genuinely a
     # turn fold, the exact scenario Rabbit Runner eligibility requires
     assert len(fold_events[0].community_cards) == 4
 
 
-def test_rabbit_hunt_showcase_sam_wins_uncontested():
+def test_rabbit_hunt_showcase_rio_wins_uncontested():
     demo = _build_rabbit_hunt_showcase()
     result = [e for e in demo.events if e.kind == "hand_result"][0]
-    assert result.payouts == {"Sam": 10}
+    assert result.payouts == {"Rio": 10}
 
 
 def test_rabbit_hunt_showcase_reveals_a_river_card():

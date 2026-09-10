@@ -4,8 +4,8 @@
 Claude session or a human developer. This tells you exactly what exists,
 what's been verified, what's deliberately left undone, and the fastest path
 from here forward. It supersedes the previous `HANDOFF.md` — that version's
-Section 0 (the hand-history-log session) is now historical background; see
-Section 0 below for the current state instead.
+Section 0 (the rabbit-hunt-banner / bet-visibility / demo-history session) is
+now historical background; see Section 0 below for the current state instead.
 
 Start with `README.md` for how to run things and `POLISH_PLAN.md` for the
 forward-looking backlog. This document is about *state and decisions*.
@@ -14,238 +14,222 @@ forward-looking backlog. This document is about *state and decisions*.
 
 ## 0. Status as of the most recent session — read this first
 
-This session's brief came directly from the person playing the live demo
-(via chat, with screenshots), not from `POLISH_PLAN.md`'s own phased
-backlog: three real bugs found by actually clicking around the deployed
-table and the "Watch the demo" panel. This document covers the fixes for
-those three; the phased backlog in `POLISH_PLAN.md` (hand-history
-pagination, the third side-pot showcase hand, analytics visualization,
-the PokerTH-fork bet) is untouched and still exactly where the prior
-session left it.
+This session's brief came directly from the person running the project, as a
+set of "Polish Notes" covering one bigger design question and four concrete
+fixes. The bigger item is now `POLISH_PLAN.md`'s new **Phase 0.5** (inserted
+ahead of the old Phase 1-4+, which are otherwise untouched); the four
+concrete fixes are shipped, tested, and described below.
 
-**Verified the live repo directly before touching anything** — same
-practice every prior session has recommended, and this time it paid off
-differently than usual: `git clone github.com/GameTech-Systems/holdem-plus`
-succeeded (reachable from this session's sandbox, same as prior sessions
-found), and every file in it — engine modules, tests, `api.py`,
-`static/index.html`, `HANDOFF.md`, `POLISH_PLAN.md`, `README.md`, all of
-it — came back **byte-for-byte identical** to what was pasted into this
-chat as attachments. Confirmed with full-file diffs on the engine/test
-layer and fingerprint greps on the docs and the three files this session
-changed. Unlike the session that found stale attachments, there was no
-drift to correct here — just a normal starting point. Worth still doing
-this check every time rather than assuming it based on a good outcome
-once.
+**Verified the pasted engine/test/static files against each other the same
+way every prior session has recommended** — reconstructed the whole repo in
+a fresh sandbox and ran `pytest -q` *before* making any change, to confirm
+the starting point actually matches what `HANDOFF.md`/`README.md` claimed.
+**222 passed**, matching the prior handoff's stated baseline exactly, so
+there was no drift to reconcile this time (this sandbox cannot reach
+`github.com/GameTech-Systems/holdem-plus` for a live diff the way some prior
+sessions did — see Section 6 — so this in-context reconstruction is the
+closest equivalent available here).
 
-**`pytest -q` on the pasted/live snapshot: 218 passed**, confirming the
-baseline the prior `HANDOFF.md` stated.
+### The big item: hand reveal & showdown sequence
 
-### The three bugs, and what turned out to be true about each
+**The report:** when a hand resolves with no further betting decisions
+possible — the common case is both players shoving preflop — the game jumps
+straight to the next hand with a full board and no visible reveal sequence.
+The only way to see what happened is the table-activity log or hand history
+after the fact. The ask: an all-in (or any early-terminating) hand should
+step through all-in players' hole cards revealed -> beat -> flop -> beat ->
+3rd hole card -> beat -> turn -> beat -> river -> a showdown beat that names
+and highlights the winning hand against what everyone else had, and every
+hand reaching showdown (not just fast-forwarded ones) deserves that same
+showdown treatment.
 
-1. **"The rabbit hunt option remains after the hand completes and a new
-   hand is dealt. I clicked rabbit hunt on a hand that was fully dealt
-   (5 community cards already showing), but it revealed the river card
-   from the previous hand."**
+**The question alongside it:** whether this is really the PokerTH-fork
+conversation (`POLISH_PLAN.md` Phase 4+) in disguise — i.e. whether hand-
+building this reveal animation is worth it versus adopting an existing
+poker UI that (presumably) already has one.
 
-   This is **working as designed, not a logic bug** — but the design was
-   never labeled clearly enough, and that's a real usability bug worth
-   fixing on its own. `last_hand_result` / `last_completed_hand` (and any
-   rabbit-hunt offer riding along with them) are documented, on purpose,
-   to stay valid for the **entire duration of the next hand**, not just
-   until that next hand's board fills up — see `last_completed_hand`'s
-   own docstring in `api.py`, which this session left unchanged. That
-   next hand can perfectly normally reach a full 5-card board of its own
-   while still just being *in progress* (river betting, not yet
-   complete), and the "Last hand" banner sitting above the felt was
-   giving no indication that it was still talking about an older,
-   already-finished hand rather than the live one underneath it. That's
-   exactly the confusion in the report. Traced through the reported
-   scenario against `api.py`/`orchestrator.py` line by line before
-   concluding this — didn't want to paper over an actual eligibility bug
-   with a labeling fix, so this took the most verification time of the
-   three.
+**Direct answer: no, don't fork for this.** Build it on the current custom
+client. Reasoning, in full in `POLISH_PLAN.md`'s new Phase 0.5, summarized
+here: the fork question is about replacing the *whole* table UI with a
+general-purpose Hold'em client, which is a legitimate option for the felt,
+seating, and betting controls — those are genuinely generic concerns PokerTH
+already solves well. But the specific gap here isn't generic. The reason it
+needs a beat for the 3rd hole card in the middle of the sequence — the
+reason a standard 7-card Hold'em client's reveal animation has never had to
+represent this at all — is Hold'em Plus's own rule. Forking would still mean
+writing this exact sequencing logic from scratch inside the fork's reveal
+code; it doesn't pre-exist anywhere to inherit. Forking trades one set of
+custom code for a different set of custom code, on top of a real protocol-
+integration project and the AGPL/GPL licensing review `TRADEMARKS.md`/
+`LICENSE` already flag for that path. Doing this on the existing client is
+strictly less total work for this specific feature, and doesn't foreclose
+forking later for the broader UI overhaul Phase 4+ already describes on its
+own terms.
 
-   **Fix, scoped to stay a UI clarity change and not touch the
-   documented eligibility window:**
-   - `_serialize_hand_result()` (`api.py`) now also returns
-     `hand_number` (the same `session.hands_completed` value the
-     persistent hand-history log already numbers that hand by), so the
-     client can label the banner unambiguously and cross-reference it
-     against `/tables/{id}/hands`.
-   - `static/index.html`'s banner now reads "Hand #N (previous): ..."
-     instead of "Last hand: ...", says "that hand's board:" instead of
-     just "board:", and — specifically when a rabbit-hunt offer is
-     showing — adds an explicit line underneath the button: *"This is
-     the hand that just finished — not the one in progress below."*
-     The button itself also gets a `title` tooltip repeating that.
-   - Did **not** change when the offer expires. If a future session
-     wants to change that (e.g. auto-hide once the live hand's own board
-     hits 5 cards), that's a deliberate behavior change to make on
-     purpose, not a side effect of a labeling fix — see
-     `TableSession.last_completed_hand`'s docstring for why the current
-     window is a full hand's length by design.
+**Why this is designed, not built, this session:** it's genuinely bigger
+than this project's own ~5-hour session sizing once you include the engine
+change, its tests, the showdown-description work, and the actual felt
+animation (which needs the real-browser verification this project has
+chronically struggled to get, not just another jsdom pass). Rather than
+rush a partial or unvalidated version of a feature that touches
+`orchestrator.py` — code this project explicitly treats as audited, given
+how disputed side-pot and betting-sequencing bugs are in real poker
+software — this session wrote the concrete design (data model, API surface,
+frontend consumption, a suggested 0.5a/0.5b/0.5c split, and an explicit
+definition of done) into `POLISH_PLAN.md` so the next session can execute
+against it directly instead of re-deriving the approach. Read that section
+in full before starting; don't re-litigate the fork question from scratch,
+it's already been decided above and there.
 
-2. **"When a bet is made, the opponent isn't shown the bet amount, just
-   provided the option to call/raise/fold."**
+### The four concrete fixes (all shipped this session)
 
-   This one **was** a real gap, and it wasn't just a frontend styling
-   problem — `api.py`'s live `hand` payload never sent the bet size
-   anywhere at all. There was no `current_bet`, no `pot_total`, and no
-   per-player "how much have they put in this street" field for the
-   frontend to have rendered even if it had wanted to. An opponent
-   facing a raise had genuinely no way to see its size from the API
-   response, full stop.
+1. **"Skip ahead" moved next to "Exit demo."** Both buttons now live
+   together in `#demo-panel .demo-head`, inside a new
+   `.demo-head-buttons` wrapper, instead of "Skip ahead" sitting alone in
+   its own row below the log. The now-empty `.demo-controls` wrapper and
+   its CSS rule are removed; `.demo-head`'s `align-items` changed from
+   `baseline` to `center` so the title and the two buttons line up
+   properly. No JS changes needed — both buttons are still looked up by
+   the same element IDs, just relocated in the DOM.
 
-   **Fix:**
-   - `api.py`'s live `hand` payload gained three fields: `current_bet`
-     (the amount every player on the current street needs to match,
-     gated the same way `Hand.current_actor_id` already gates on
-     `BETTING_STREETS`), `pot_total` (everything committed to the pot so
-     far this hand, across every street), and, per player,
-     `bet_this_street` (`PlayerState.committed_this_street`, unredacted
-     for every viewer — this is public information at a real table, the
-     same way stack size already was).
-   - `static/index.html`: each seat now shows a `Bet: N` line when
-     nonzero; the pot line now reads `Blinds X/Y · Pot: Z`; the "waiting
-     on…" and "your turn" hints now say `Current bet: N (M to call)`;
-     and the CALL button's label becomes `call M` instead of a bare
-     `call` once there's actually something to call.
-   - New tests in `test_api.py`: `test_live_hand_reports_current_bet_and_pot_total_preflop`,
-     `test_bet_amount_is_visible_to_the_non_acting_player` (raises to 20,
-     asserts the *other* player's view shows `current_bet: 20` and the
-     actor's `bet_this_street: 20`), and
-     `test_bet_this_street_resets_between_streets`.
-   - Verified over a real HTTP round trip (not just `TestClient`) with a
-     live `uvicorn` process and `requests`, not only via pytest — see
-     Section 2 below for the exact numbers.
+2. **Rabbit Runner's summary text was inaccurate.** The old copy — "Fold
+   on the turn or river, and you can still pay to see the river you'd have
+   faced" — implied folding on the river itself was a meaningful case for
+   this feature, but the river is already showing on the board by the time
+   a river fold is possible, so there'd be nothing left to reveal. Changed
+   `demo_showcase.py`'s `Rabbit Runner` `DemoHand.summary` to: "If folding
+   ends the hand before the river's revealed, you can still pay to see
+   what it would have been" — describing the case that's actually
+   meaningful, matching the phrasing suggested directly. The underlying
+   eligibility logic (`Hand.is_eligible_for_rabbit_hunt`, still turn-or-
+   river) is untouched; this was a copy fix, not a rules change. Also
+   lightly touched up the similar aside in the `#demo-teaser` paragraph in
+   `static/index.html` for consistency ("pay to reveal the river when a
+   fold ends the hand before it's shown").
 
-3. **"On 'watch demo,' the first hand goes quick and disappears after the
-   2nd hand is dealt. It'd be nice to have that history accessible,
-   similar to the real game's collapsible box."**
+3. **The "front-loaded deal is the whole point" aside is gone.** That
+   sentence, in the Rabbit Runner reveal narration, was explaining an
+   *implementation* detail (the deck is dealt front-loaded, face down,
+   which is why the river is always available to reveal) as if it were
+   something an online player should care about. It's a live-dealer
+   convenience, not an online-play concept, and a player doesn't need the
+   "why" to use the feature — removed, per direct feedback that it
+   "only pertains to live poker with real cards, not the online games."
+   (Checked the rest of the repo for the same pattern: every other mention
+   of front-loaded dealing is either scoped correctly to the live-casino
+   section of the tech plan, or is internal engine/test documentation
+   explaining *why the code is written the way it is* to a future
+   developer — not player-facing copy — so nothing else needed to change.)
 
-   Confirmed by reading `playDemoScript()`: it wipes `#demo-log`'s
-   `innerHTML` at the start of every hand in the script, with nothing
-   anywhere retaining the previous hand's narration once that happens.
-   Exactly the reported behavior, and there was no history object for it
-   at all going into this session — this needed building from scratch,
-   not patching.
+4. **The Rabbit Runner demo hand itself was rebuilt** so the fold and the
+   rabbit hunt both mean something, instead of an arbitrary bet/fold:
+   - **Rio** (button/SB) holds `8d 7s`, draws `6c` as his 3rd hole card.
+     Board through the turn is `9s 3c 2c` (flop) `Td` (turn). Verified via
+     `hand_evaluator.evaluate_best_of`: Rio is high-card-only through the
+     flop, and the turn card (`Td`) completes a ten-high straight
+     (`9s`-`Td` from the board plus `8d 7s 6c` from his own cards) — so
+     "Rio bets 6, that ten on the turn just gave him a straight" is
+     literally true at the moment he bets, not asserted after the fact.
+   - **Sam** (BB) holds `Kh Jd`, draws `4d`. Through the turn he has
+     exactly a king-high gutshot needing a queen (`K _ J T 9`, the `Q`
+     being the only card that connects the board's `T`/`9` to his `K`/`J`)
+     — verified the same way: no pair, no straight, and adding a queen
+     (checked directly) produces `K-Q-J-T-9`, a king-high straight that
+     *beats* Rio's ten-high one. Sam folds to Rio's bet (a sound fold —
+     a single-card gutshot with one card left to come isn't good odds
+     against a bet), then rabbit hunts and the scripted river genuinely
+     is `Qh` — so the reveal is "yes, you would have caught it, and it
+     would have been good enough," not a coin flip either way.
+   - This flips which player folds and rabbit hunts (Sam, not Rio;
+     Rio wins the uncontested pot of 10, not Sam) — `test_demo_showcase.py`
+     updated to match (`test_rabbit_hunt_showcase_rio_folds_on_the_turn`
+     -> `test_rabbit_hunt_showcase_sam_folds_on_the_turn`, asserting
+     `actor == "Sam"`; `test_rabbit_hunt_showcase_sam_wins_uncontested`
+     -> `test_rabbit_hunt_showcase_rio_wins_uncontested`, asserting
+     `{"Rio": 10}`). The fee-conservation and river-reveal tests needed no
+     numeric changes — the blind amounts, and therefore the fee, don't
+     depend on which seat wins.
+   - Verified end to end three ways before trusting any of this: (a) the
+     card math directly against `evaluate_best_of` at each street, shown
+     above; (b) the actual scripted hand run through the real engine
+     (`Hand`, not a mock) via a throwaway script, confirming the printed
+     narration and payouts matched what was intended; (c) the full
+     `pytest -q` suite, both immediately after the `demo_showcase.py`
+     edit and again after every subsequent file change this session.
 
-   **Fix:** `static/index.html`'s demo panel gained a
-   `demoHandHistory` array (JS-only, scoped to the current "Watch the
-   demo" run-through — this data was never going to survive a page
-   reload, and it doesn't need to) and a collapsible
-   `<details id="demo-history-panel">` panel, reusing the exact same
-   `.history-entry` / `.history-detail` / `.history-row` /
-   `historyRow()` / `historyCards()` CSS classes and helper functions the
-   real table's hand-history panel already used — no new CSS needed
-   beyond a couple of spacing rules for the nested-panel case. Each
-   showcase hand, once its playback finishes, gets archived with its
-   title, final board, payout, both players' revealed hole cards, any
-   rabbit-hunt line, and the **full play-by-play narration transcript**
-   (every `DemoEvent.narration` in order) inside the expandable row —
-   more detail than the real game's history panel shows, since a
-   `DemoHand`'s entire `events` array is already fully known up front
-   (nothing to fetch), unlike the real game's history which is
-   necessarily summary-only over the network.
+5. **`CONTRIBUTING.md` got a new "Known extension points" section**,
+   per the explicit request to note — but not build — the idea that a real
+   casino operator might want Rabbit Runner to reveal *both* remaining
+   streets (not just the river) for a player who folds even earlier
+   (preflop or on the flop), since neither card has been shown yet at that
+   point. Framed as a real v2 feature needing its own pricing/eligibility/
+   accounting design, not a quick addition, consistent with how this file
+   already talks about the DAT-hardware and real-money exclusions.
 
-### How this session verified the frontend changes (no real browser here either — see Section 3)
+### How this session verified the frontend change (still no real browser — see Section 3)
 
-Same limitation every session has had: no way to open a real browser
-from this sandbox. What this session did instead, in increasing order of
-rigor:
-1. Extracted the `<script>` block and ran `node --check` on it — plain
-   syntax validation, catches nothing behavioral.
-2. Built a throwaway `jsdom` scaffold (same tool, same "build it, use
-   it, delete it before finishing" discipline the two prior frontend
-   sessions used) that loaded the real `static/index.html` via
-   `JSDOM(..., { runScripts: "dangerously" })` and called the actual
-   `render()`, `renderSeats()`, `renderActions()`,
-   `renderLastHandBanner()`, and `renderDemoHandHistory()` functions
-   directly with hand-built state objects mirroring exactly what
-   `api.py` now sends, then asserted on the resulting DOM: the pot line,
-   the per-seat bet amounts, the CALL button's label, the banner's exact
-   wording (hand number + "that hand's board" + the "not the one in
-   progress below" clarifying line + a working rabbit-hunt button), and
-   the demo history entry's title/payout/narration/hole cards. All
-   assertions passed after fixing one real thing this caught early: a
-   stray `#` where a `//` belonged inside a JS comment block, which
-   would have been a silent syntax error in a real browser too (`node
-   --check` had already caught the general shape of that, but the jsdom
-   pass is what actually exercised the surrounding code paths).
-   Deleted the scaffold (`node_modules`, `package.json`, the script
-   itself) before finishing, per the standing practice — not part of the
-   repo.
-3. Also drove the *backend* half of bug 2 over a real HTTP round trip —
-   an actual `uvicorn` process on a local port, hit with `requests` (not
-   `TestClient`), confirming `current_bet`/`pot_total`/`bet_this_street`
-   come back correctly shaped over the wire, not just through in-process
-   ASGI. Output, for the record: preflop heads-up showed
-   `current_bet: 2`, `pot_total: 3` (sb 1 + bb 2); after the acting
-   player raised to 25, the *other* player's own `/state` call showed
-   `current_bet: 25` and the actor's `bet_this_street: 25`.
+Same standing limitation as every session before this one: no way to open
+an actual browser from this sandbox. In increasing order of rigor:
 
-**This still isn't a real browser.** Whoever picks this up next and can
-actually load the deployed URL should specifically re-check: the
-rabbit-hunt banner wording reads naturally (not just structurally
-correct) once you've actually folded a hand and watched the next one
-play out under it; the bet amounts render legibly at actual seat-box
-size on the felt, not just present in the DOM; and the demo history
-panel's nested `<details>` rows don't look cramped next to the existing
-outer panel border. None of these are things a jsdom assertion can
-tell you.
+1. `node --check` on the extracted `<script>` block — clean.
+2. A Python `html.parser`-based tag-balance check across the whole file —
+   confirmed no unclosed/mismatched tags from the `.demo-head`
+   restructuring (open-tag stack empty at end of parse).
+3. The full `pytest -q` suite (222 passed, see below) — doesn't touch the
+   frontend directly, but confirms the `api.py`/`demo_showcase.py` side
+   that feeds it is correct.
+
+This is a smaller, lower-risk change than prior frontend sessions (moving
+two existing buttons into a shared wrapper, plus two copy edits — no new
+JS logic, no new state, no new event handlers), so this session judged the
+jsdom-scaffold treatment from the prior session's Bug 1-3 fixes to be more
+machinery than this specific change warranted. **Still flagging for the
+next real-browser pass, as always:** confirm the two demo-panel buttons
+sit next to each other and don't wrap awkwardly at a narrow (mobile) width,
+and confirm the rebuilt Rabbit Runner hand reads naturally at real
+animation speed, not just correctly in the JSON.
 
 ### Test suite
 
-**222 passed** (218 prior + 4 new, all in `test_api.py`; no other test
-file needed changes — the fixes were additive fields/markup, not
-behavior changes to anything the existing 218 tests already covered).
-`example_usage.py`, all engine modules, and every other test file are
-untouched and still byte-identical to the live repo.
+**222 passed** — same count as the prior handoff. Two tests in
+`test_demo_showcase.py` were rewritten (not added or removed) to match the
+rebuilt hand; every other test file is untouched. `example_usage.py` and
+every engine module besides `demo_showcase.py` are untouched.
 
 ### What did NOT change this session
 
-- The rabbit-hunt eligibility *window* itself (still the full next
-  hand's duration, by design — see bug 1's writeup above).
-- Anything in `orchestrator.py`, `betting_state_machine.py`,
-  `side_pots.py`, `hand_evaluator.py`, `poker_types.py`,
-  `tournament_structure.py`, `tournament_balancing.py`,
-  `analytics.py`, or `demo_showcase.py`. All three bugs were fully
-  addressable at the `api.py` serialization layer and the
-  `static/index.html` rendering layer; nothing about the actual game
-  logic was wrong.
-- `POLISH_PLAN.md`'s phased backlog (Phase 1 pagination/multi-way-pot
-  test, Phase 2 third showcase hand, Phase 3 analytics visualization,
-  Phase 4+ the PokerTH fork) — see that file for the one line this
-  session did touch (the Phase 0 auto-deploy checkbox, next section).
+- `orchestrator.py`, `betting_state_machine.py`, `side_pots.py`,
+  `hand_evaluator.py`, `poker_types.py`, `tournament_structure.py`,
+  `tournament_balancing.py`, `analytics.py`, `api.py` — none of these
+  needed a code change for the four concrete fixes. (Phase 0.5's `runout`
+  work, once someone picks it up, *will* touch `orchestrator.py` and
+  `api.py` — see `POLISH_PLAN.md`.)
+- `Hand.is_eligible_for_rabbit_hunt()`'s actual eligibility logic — only
+  the demo's prose describing it changed, not the rule itself.
+- Everything Section 3 of the prior `HANDOFF.md` already flagged as not
+  built (still true, carried forward in Section 3 below).
+- This session's changes are, as always, not pushed or redeployed — see
+  Section 1, carried forward unchanged.
 
 ---
 
-## 1. Deployment note from this session
+## 1. Deployment note (carried forward, unchanged)
 
-The person running this project confirmed directly (not something this
-session could verify itself): **Render does auto-deploy on every push to
-`main`.** This resolves the open question `POLISH_PLAN.md` Phase 0 and
-the prior `HANDOFF.md` both flagged ("nothing in this repo's history
-confirms one way or the other whether pushes to `main` currently reach
-the live URL automatically"). `POLISH_PLAN.md`'s Phase 0 checklist has
-been updated to reflect this — see that file. Practically: once
-`api.py`, `test_api.py`, `static/index.html`, and `README.md` from this
-session are pushed to `main`, the live demo should update on its own,
-no manual redeploy step needed.
-
-Same limitation as every prior session on the push itself: this sandbox
-has no push credentials for `github.com/GameTech-Systems/holdem-plus`
-(it *can* read the repo, which is how Section 0's verification above
-happened, but reading and writing are different permissions and only
-the former is available here). A human still needs to actually commit
-these four files.
+The person running this project confirmed directly: **Render does
+auto-deploy on every push to `main`.** Practically: once the files this
+session touched (`demo_showcase.py`, `test_demo_showcase.py`,
+`static/index.html`, `CONTRIBUTING.md`, `POLISH_PLAN.md`, and this file)
+are pushed, the live demo should update on its own, no manual redeploy
+step needed. This sandbox still has no push credentials for
+`github.com/GameTech-Systems/holdem-plus` — a human needs to actually
+commit these files, same as every session before this one.
 
 ---
 
 ## 2. What exists right now
 
-Unchanged from the prior handoff except the four files this session
-touched:
+Unchanged in shape from the prior handoff; the five files this session
+touched are marked:
 
 ```
 poker_types.py, hand_evaluator.py, betting_state_machine.py,
@@ -253,127 +237,123 @@ side_pots.py, tournament_structure.py, tournament_balancing.py
   -> orchestrator.py (Hand + Tournament)
   -> analytics.py (hands/hour, pot-vs-blinds, showdown frequency,
                     hand-strength distribution, player feedback)
-  -> demo_showcase.py (two scripted, deterministic showcase hands,
-                        built on top of orchestrator.Hand directly)
+  -> demo_showcase.py  *** CHANGED (Rabbit Runner hand rebuilt) ***
   -> api.py (REST + WebSocket, /analytics, /feedback, /demo/script,
-             /tables/{id}/hands, and -- new this session -- current_bet /
-             pot_total / bet_this_street on the live hand payload, and
+             /tables/{id}/hands, current_bet/pot_total/bet_this_street,
              hand_number on last_hand)
-  -> static/index.html (vanilla JS client, served at /app/: table play,
-                         bet/pot visibility on every seat, a clearly-
-                         labeled previous-hand/rabbit-hunt banner,
-                         the collapsible real-table "Hand history" panel,
-                         and -- new this session -- a matching
-                         collapsible history panel inside the demo)
+  -> static/index.html  *** CHANGED (demo button layout, two copy edits) ***
+
+test_demo_showcase.py  *** CHANGED (2 tests updated for the rebuilt hand) ***
+CONTRIBUTING.md  *** CHANGED (new "Known extension points" section) ***
+POLISH_PLAN.md  *** CHANGED (new Phase 0.5 inserted ahead of old Phase 1) ***
 ```
 
-Changed this session: `api.py`, `static/index.html`, `test_api.py`,
-`README.md` (test count + three short new sections documenting the
-fixes), `POLISH_PLAN.md` (one checkbox). Everything else — every other
-module, every other test file, `example_usage.py`, all governance/
-deployment docs — is untouched and confirmed byte-identical to the live
-repo (see Section 0).
-
-The live instance is `https://holdem-plus-demo.onrender.com/app/` —
-**this session's changes are not deployed there yet**; see Section 1.
+The live instance is `https://holdem-plus-demo.onrender.com/app/` — **this
+session's changes are not deployed there yet**; see Section 1.
 
 ---
 
 ## 3. What's explicitly NOT built — read this before promising anything
 
-Carried forward, all still true: no real frontend fork, no persistence,
-no multi-table routing in the API, no rate limiting/auth beyond opaque
-guest IDs, the known engine simplifications documented in their own
-modules, the Monte Carlo baseline is Hold'em-only, demo mode is fixed at
-exactly two hands (the third, side-pot-focused one is still
-`POLISH_PLAN.md` Phase 2, unstarted), no hand-history pagination in the
-UI (`POLISH_PLAN.md` Phase 1), and `welcome_message.md`'s content has
-still never been posted to GitHub Discussions.
+Carried forward, all still true: no real frontend fork (see Phase 0.5's
+answer above for why that's not the lever for the reveal-sequence gap
+specifically; Phase 4+ is still the separate, larger, not-yet-started
+question), no persistence, no multi-table routing in the API, no rate
+limiting/auth beyond opaque guest IDs, the known engine simplifications
+documented in their own modules, the Monte Carlo baseline is Hold'em-only,
+demo mode is fixed at exactly two hands (the third, side-pot-focused one
+is still `POLISH_PLAN.md` Phase 2, unstarted), no hand-history pagination
+in the UI (`POLISH_PLAN.md` Phase 1), and `welcome_message.md`'s content
+has still never been posted to GitHub Discussions.
 
 New from this session:
 
-- **No real-browser click-through of any of the three fixes** — see
-  Section 0's verification writeup for exactly what substitute
-  verification was done instead (jsdom + a live HTTP round trip), and
-  what it can't tell you.
-- **The rabbit-hunt banner's clarity fix is a labeling change, not a
-  timing change.** If user feedback after this ships says the banner is
-  *still* confusing even with the new wording, the next lever to pull is
-  changing when it disappears (e.g., tying it to the live hand reaching
-  a certain point rather than only to the live hand *completing*) — but
-  that's a deliberate behavior change against a documented design
-  decision, not a follow-on tweak to make lightly. Read
-  `TableSession.last_completed_hand`'s docstring in `api.py` in full
-  first.
-- **`bet_this_street` and `current_bet` are not retroactively available
-  in `/tables/{id}/hands` (the persistent hand-history log) or in the
-  demo script** — they only exist on the *live* hand payload, which is
-  the only place they were ever missing/needed. A finished hand's
-  history entry has no ongoing "current street" to report a bet against,
-  so this isn't a gap, just worth being explicit about scope.
-- **This session's changes are not pushed or redeployed** — see Section 1.
+- **The reveal/showdown sequence itself is designed, not built** — see
+  Section 0 above and `POLISH_PLAN.md` Phase 0.5 in full. A hand that
+  resolves without further betting decisions (typically an all-in) still
+  jumps straight to its final state with no animated runout; that's
+  exactly the gap Phase 0.5 exists to close, and it hasn't been closed
+  yet.
+- **No showdown hand-strength descriptions anywhere yet** (Phase 0.5b) —
+  a revealed hand's category (e.g. "Full House, Aces full of Kings") isn't
+  surfaced by `api.py` or rendered by `static/index.html` at all today,
+  for any hand, fast-forwarded or not.
+- **No real-browser check of the button-layout change** — see the
+  verification writeup above for what substitute checks were run instead.
 
 ---
 
 ## 4. Open decisions (not bugs — need a person to decide, not a fix)
 
 1. **Entity naming mismatch** (`TRADEMARKS.md`) — still unresolved, now
-   four handoffs running. Untouched again this session; nobody has
-   picked this up despite `POLISH_PLAN.md` Phase 0 listing it as a
-   quick, code-free decision.
-2. ~~Does Render auto-deploy on push to `main`?~~ — resolved this
-   session; see Section 1.
-3. **How far to extend demo mode** — still `POLISH_PLAN.md` Phase 2's
+   several handoffs running. Untouched again this session.
+2. **How far to extend demo mode** — still `POLISH_PLAN.md` Phase 2's
    concrete, unstarted plan for a third (side-pot) showcase hand.
+3. **Whether to build the optional multi-street Rabbit Runner reveal**
+   for earlier folds (preflop/flop) — newly documented as a real v2 idea
+   in `CONTRIBUTING.md`'s "Known extension points," explicitly not needed
+   for this demo. Nobody needs to decide anything about it now; it's
+   flagged so a future contributor doesn't have to rediscover the idea
+   from scratch, and so it doesn't get bolted on hastily if it comes up
+   in an issue or PR.
 
 ---
 
 ## 5. Fastest path from here forward
 
-1. **Push `api.py`, `static/index.html`, `test_api.py`, `README.md`,
-   and `POLISH_PLAN.md` from this session to `main`.** Given the
-   auto-deploy confirmation in Section 1, this alone should get the
-   fixes live without a separate manual deploy step — but confirm the
-   live URL actually reflects them afterward (see next item), since
-   this session has no way to check that itself.
-2. **Finally do the real-browser click-through every prior session has
-   flagged and none has closed** — now five bug-fix/feature sessions in
-   a row without one. Specifically for this session's changes: fold a
-   hand on the turn, let the next hand play deep into its own board, and
-   confirm the rabbit-hunt banner's new wording actually reads clearly
-   in the moment rather than just passing a jsdom assertion; face a
-   raise as the non-acting player and confirm the bet amount is legible
-   at real seat-box size; and watch the full demo end to end, then open
-   the new "Hands played so far" panel and confirm both showcase hands'
-   transcripts are there and readable.
-3. **`POLISH_PLAN.md` Phase 1** — hand-history pagination, a fetch-
-   failure state, and the multi-way side-pot test the feature is still
-   missing. Untouched this session, still next in line per that
-   document's own ordering.
-4. **`POLISH_PLAN.md` Phase 2** — the third (side-pot) demo showcase
-   hand. Also untouched.
+1. **`POLISH_PLAN.md` Phase 0.5** — the reveal/showdown sequence. This is
+   the person's stated top priority; start with 0.5a (the `runout` field
+   on `Hand`/`HandResult`, threaded through `api.py`, with its own tests —
+   no frontend work in that slice) since 0.5c depends on it. 0.5b
+   (showdown hand descriptions) can ride along with 0.5a or be its own
+   short session; it doesn't depend on the runout work at all.
+2. **Push this session's files and finally do the real-browser
+   click-through** — still true every session: `POLISH_PLAN.md` Phase 0's
+   own checklist has been sitting unresolved across many handoffs now.
+   Specifically for this session's changes: confirm the demo-panel button
+   pair looks right at a narrow width, and watch the rebuilt Rabbit Runner
+   hand play out at real animation speed.
+3. **`POLISH_PLAN.md` Phase 1** — hand-history pagination, a fetch-failure
+   state, and the multi-way side-pot test. Untouched this session.
+4. **`POLISH_PLAN.md` Phase 2** — the third (side-pot) demo showcase hand.
+   Also untouched; note it now shares groundwork with Phase 0.5 (both want
+   a rigged multi-way deck / a richer showdown moment), so whoever does
+   Phase 0.5b's hand-description work might find Phase 2 meaningfully
+   cheaper as a result.
 5. **Phase 3 / Phase 4+** — analytics visualization, then the real
-   frontend fork. Also untouched, same as every session before this one.
+   frontend fork question (for the *general* table UI, not as a fix for
+   Phase 0.5's specific gap — see Section 0). Also untouched.
 
 ---
 
 ## 6. If you're a fresh Claude session picking this up
 
-Clone `https://github.com/GameTech-Systems/holdem-plus` and diff it
-against whatever's pasted into your chat before trusting either one —
-this session did, and for once found no drift at all (see Section 0),
-but that's not a reason for the *next* session to skip the check; it's
-one data point, not a new standing guarantee.
+This sandbox could not reach `github.com` to diff against the live repo
+directly (network access here is limited to package registries, GitHub's
+code-hosting domains for `pip`/`npm`-style installs, and Anthropic's own
+API — not arbitrary `git clone` traffic in every environment; check your
+own session's network configuration rather than assuming). What this
+session did instead: reconstructed the whole repo from the files pasted
+into this chat, ran `pytest -q` *before* touching anything to confirm the
+starting point matched the prior handoff's stated baseline (222 passed,
+it did), and only then made changes — re-running the full suite after each
+file edit, not just at the end. If your environment *can* reach the real
+repo, still diff it before trusting either source, the same standing advice
+every prior handoff has given.
 
-Run `pytest -q` first thing; the baseline as of this session is **222
-passed**.
+Baseline going into your session: **222 passed.**
 
-If your task also touches the frontend: build the jsdom scaffold the
-same way this session did (`JSDOM(html, { runScripts: "dangerously" })`,
-call the real render functions directly with hand-built state objects,
-assert on the resulting DOM, delete the scaffold before finishing). It's
-meaningfully better than a syntax check and catches real mistakes (this
-session's stray `#`-instead-of-`//` typo, for instance) without needing
-a real browser. It is still not a substitute for one — the standing
-advice from every prior handoff about actually loading the live URL
-applies here exactly as much as it always has.
+If your task touches the frontend: the jsdom-scaffold approach from two
+sessions ago (`JSDOM(html, { runScripts: "dangerously" })`, call the real
+render functions with hand-built state, assert on the resulting DOM,
+delete the scaffold before finishing) is still the right tool for anything
+that changes rendering *logic*. This session judged its own change (moving
+two buttons, two copy edits) small enough for a lighter check instead
+(`node --check` plus a tag-balance pass) — use your judgment on which a
+given change actually needs, but default to the fuller scaffold once
+there's any new JS behavior involved, which Phase 0.5c (the actual runout
+animation) very much will have.
+
+If your task is Phase 0.5: read that section of `POLISH_PLAN.md` in full
+before writing any code. The fork question has already been answered
+there and in Section 0 above — don't re-open it from scratch.

@@ -292,9 +292,9 @@ def _build_extra_card_showcase() -> DemoHand:
 def _build_rabbit_hunt_showcase() -> DemoHand:
     seat_order = [("Rio", 200), ("Sam", 200)]  # seat 0 = button/small blind (heads-up)
 
-    hole = {0: parse_cards("Qc 9h"), 1: parse_cards("Ad Kd")}
-    third = {0: parse_cards("2d")[0], 1: parse_cards("5c")[0]}
-    community = parse_cards("Jc 4h 8s Ts 3h")  # flop, flop, flop, turn, river
+    hole = {0: parse_cards("8d 7s"), 1: parse_cards("Kh Jd")}
+    third = {0: parse_cards("6c")[0], 1: parse_cards("4d")[0]}
+    community = parse_cards("9s 3c 2c Td Qh")  # flop, flop, flop, turn, river
 
     deck = _build_scripted_deck(
         num_players=2,
@@ -320,7 +320,7 @@ def _build_rabbit_hunt_showcase() -> DemoHand:
     events.append(
         DemoEvent(
             kind="reveal",
-            narration="Flop: J\u2663 4\u2665 8\u2660 -- 3rd hole cards go out.",
+            narration="Flop: 9\u2660 3\u2663 2\u2663 -- 3rd hole cards go out.",
             community_cards=[str(c) for c in hand.community_cards],
             players=_snapshot(hand),
             highlight=True,
@@ -332,34 +332,39 @@ def _build_rabbit_hunt_showcase() -> DemoHand:
     events.append(
         DemoEvent(
             kind="reveal",
-            narration="Turn: T\u2660.",
+            narration="Turn: T\u2666.",
             community_cards=[str(c) for c in hand.community_cards],
             players=_snapshot(hand),
         )
     )
-    _apply(hand, events, "Sam", ActionType.BET, "Sam bets 6.", amount=6)
-    _apply(hand, events, "Rio", ActionType.FOLD, "Rio doesn't like facing a bet here and folds.")
+    _apply(hand, events, "Sam", ActionType.CHECK, "Sam checks.")
+    _apply(
+        hand, events, "Rio", ActionType.BET,
+        "Rio bets 6 -- that ten on the turn just gave him a straight.", amount=6,
+    )
+    _apply(hand, events, "Sam", ActionType.FOLD, "Sam's only got a gutshot draw and folds to the bet.")
 
     assert hand.is_complete
-    assert hand.is_eligible_for_rabbit_hunt("Rio")
+    assert hand.is_eligible_for_rabbit_hunt("Sam")
     events.append(
         DemoEvent(
             kind="hand_result",
-            narration="Sam takes the pot uncontested.",
+            narration="Rio takes the pot uncontested.",
             community_cards=[str(c) for c in hand.community_cards],
             players=_snapshot(hand),
             payouts=dict(hand.result.payouts),
         )
     )
 
-    river = hand.rabbit_hunt("Rio")
+    river = hand.rabbit_hunt("Sam")
     events.append(
         DemoEvent(
             kind="rabbit_hunt",
             narration=(
-                f"Rabbit Runner: for the cost of a small blind, Rio peeks at the river that "
-                f"would have come: {river[0]}. It was already dealt face down back at the "
-                f"flop -- that front-loaded deal is the whole point."
+                f"Rabbit Runner: for the cost of a small blind, Sam pays to see the river "
+                f"that would have come: {river[0]} -- exactly the queen his gutshot needed. "
+                f"His king-jack would have turned into a king-high straight, good enough to "
+                f"beat Rio's ten-high one."
             ),
             community_cards=[str(c) for c in hand.community_cards],
             players=_snapshot(hand),
@@ -370,7 +375,10 @@ def _build_rabbit_hunt_showcase() -> DemoHand:
 
     return DemoHand(
         title="Rabbit Runner",
-        summary="Fold on the turn or river, and you can still pay to see the river you'd have faced.",
+        summary=(
+            "If folding ends the hand before the river's revealed, you can still pay "
+            "to see what it would have been."
+        ),
         events=events,
     )
 

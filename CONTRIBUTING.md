@@ -55,6 +55,30 @@ Interactive API docs are at `/docs` once the server's running.
 - **Small, focused PRs** are much easier to review than large ones,
   especially for anything touching betting legality or pot math.
 
+## Known extension points
+
+A few places in the engine deliberately implement a narrower version of
+a feature than a real casino/operator might eventually want, on
+purpose, to keep the demo's scope small. If you're picking one of these
+up, treat it as a genuine v2 feature to design carefully (with its own
+tests, at the same rigor as what it's extending) rather than a quick
+tweak:
+
+- **Rabbit Runner, multi-card reveal.** `orchestrator.Hand.rabbit_hunt()`
+  always reveals exactly the river card, for a player who folds during
+  turn or river betting (see that method's and
+  `is_eligible_for_rabbit_hunt()`'s docstrings). A real operator might
+  reasonably want to let a player who folds *earlier* (preflop or on
+  the flop) pay to reveal **both** remaining streets (turn and river)
+  instead of just one, since neither has been shown yet at that point
+  in the hand. That's a bigger surface than the current single-card
+  version — it needs its own pricing decision (one fee for two cards,
+  or two separate fees?), its own eligibility window, and its own
+  accounting the way the current fee already threads through
+  `Tournament.stacks` (see `api.py`'s `rabbit_hunt` endpoint). Not
+  needed for this demo; flagged here so it doesn't get bolted on in a
+  hurry if it comes up.
+
 ## Developer Certificate of Origin (DCO)
 
 Instead of a Contributor License Agreement, this project uses the
