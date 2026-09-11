@@ -317,6 +317,30 @@
   .demo-done { color: var(--muted); margin-top: 0.8rem; }
 
   #demo-history-panel { margin-top: 1rem; border-top: 1px solid var(--panel-border); padding-top: 0.9rem; }
+
+  /* Hand reveal sequence (POLISH_PLAN.md Phase 0.5c) -- the felt-side
+     playback of a just-finished hand's runout/showdown. Reuses .seat
+     and .card from the live table above; these are the only additions
+     layered on top. */
+  .seat.showdown-winner { box-shadow: 0 0 0 2px var(--win); }
+  .showdown-desc {
+    margin-top: 0.3rem;
+    font-size: 0.72rem;
+    color: var(--muted);
+  }
+  .seat.showdown-winner .showdown-desc { color: var(--win); font-weight: 600; }
+  @keyframes reveal-card-in {
+    from { opacity: 0; transform: scale(0.85) translateY(4px); }
+    to { opacity: 1; transform: none; }
+  }
+  .card.reveal-in { animation: reveal-card-in 0.3s ease forwards; }
+
+  /* Same treatment in the persistent hand-history panel (renderHandHistory)
+     -- hand_descriptions has been on the API since last session (0.5b) but
+     this is the first time anything in this file actually displays it. */
+  .history-hand-desc { color: var(--muted); font-size: 0.78rem; }
+  .history-winner-row .history-label,
+  .history-winner-row .history-hand-desc { color: var(--win); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -786,25 +810,265 @@ function renderCardBack() {
   return div;
 }
 
+// ---------- Hand reveal sequence (POLISH_PLAN.md Phase 0.5c) ----------
+// Plays back, on the real felt, whatever this client didn't already
+// watch happen live for a just-finished hand -- see orchestrator.
+// RunoutStep and api._serialize_runout / _showdown_hand_descriptions
+// (both shipped last session -- see HANDOFF.md) for the backend half
+// this consumes. Two things can be new here, independently:
+//
+//   1. Runout steps this connection fast-forwarded past. The common
+//      case is an early all-in: Hand._progress() races through every
+//      remaining street inside one apply_action() call (see
+//      orchestrator.py's own module docstring), so the very next state
+//      push this client sees can already have a full board. last_hand.
+//      runout is the server's own step-by-step record of what happened
+//      along the way; unseenRunoutSteps() below works out exactly which
+//      of those steps this client's felt hasn't already shown live, so
+//      a normally-paced hand -- which saw every street as its own push,
+//      since even DEAL_FLOP+DEAL_THIRD_HOLE_CARD land together in a
+//      single push right after preflop betting closes, well before any
+//      all-in -- has nothing here to replay.
+//   2. The showdown beat itself: each revealed hand's description
+//      (hand_evaluator.describe_hand_rank, via last_hand.
+//      hand_descriptions) plus a winner highlight. This is new
+//      information on EVERY hand that reaches a real showdown, not just
+//      fast-forwarded ones -- an opponent's hole cards are never sent to
+//      this client before that point regardless of pacing (see
+//      api._serialize_state's show_cards redaction: it only ever
+//      unredacts hand.players[].hole_cards for the viewer's own seat or
+//      a hand already known complete, and per renderActions' own note
+//      below, this client never observes the live `hand` as complete in
+//      the first place). So this beat fires whenever last_hand.
+//      revealed_hands is non-empty, independent of whether there were
+//      any unseen runout steps to replay first.
+//
+// A hand that ends by fold has neither (empty runout past the fold
+// point, empty revealed_hands -- see orchestrator.Hand._finalize), so
+// none of this ever fires for it; the existing last-hand banner already
+// covers that case on its own, same as before this session.
+
+let liveCommunityCount = 0;      // community cards this client has actually watched land on the felt, for whichever hand is currently `state.hand`
+let revealedHandNumber = null;   // last_hand.hand_number this client has already resolved (played back, or found nothing to play) -- last_hand itself stays non-null on every subsequent poll, so without this we'd replay the same reveal on every single one
+let revealChainActive = false;   // true for the duration of a runRevealSequence() call
+let revealSkipRequested = false;
+let pendingRevealResolve = null; // the resolve() of whichever revealSleep() is currently pending, if any -- lets the Skip button cut a wait that's already in flight short, not just suppress future ones
+let latestReceivedState = null;  // always the most recent state received, even mid-reveal, so settling in at the end of a reveal never renders something stale
+
+function unseenRunoutSteps(runout, seenCommunityCount) {
+  // The first step this client hasn't effectively already seen live.
+  // Community-card length alone isn't quite enough to find it: DEAL_FLOP
+  // and DEAL_THIRD_HOLE_CARD both leave community_cards at the same
+  // length (the 3rd hole card is a HOLE card, not a board card -- see
+  // orchestrator.RUNOUT_STREETS), so an early-all-in's hole-card reveal
+  // can land on a step whose board count didn't change from the step
+  // before it. Checking revealed_hole_cards too catches that; everything
+  // from the first matching step onward counts as unseen by
+  // construction, since both fields only ever grow across the sequence
+  // -- nothing later can be "more seen" than something earlier.
+  const idx = runout.findIndex((step) =>
+    step.community_cards.length > seenCommunityCount ||
+    Object.keys(step.revealed_hole_cards || {}).length > 0
+  );
+  return idx === -1 ? [] : runout.slice(idx);
+}
+
+function revealSleep(ms) {
+  if (revealSkipRequested) return Promise.resolve();
+  return new Promise((resolve) => {
+    pendingRevealResolve = resolve;
+    setTimeout(() => {
+      if (pendingRevealResolve === resolve) pendingRevealResolve = null;
+      resolve();
+    }, ms);
+  });
+}
+
+function findSeatEl(playerId) {
+  return Array.from(document.querySelectorAll("#seats .seat")).find(
+    (el) => el.dataset.playerId === playerId
+  ) || null;
+}
+
+function applyRevealedHoleCards(holeCardsByPid) {
+  Object.entries(holeCardsByPid).forEach(([pid, cards]) => {
+    const seat = findSeatEl(pid);
+    const cardsEl = seat && seat.querySelector(".cards");
+    if (!cardsEl) return; // shouldn't happen -- render() only starts a reveal once the felt already has seats on it (see the seatsAlreadyOnFelt guard below)
+    cardsEl.innerHTML = "";
+    cards.forEach((c) => {
+      const cardEl = renderCard(c);
+      cardEl.classList.add("reveal-in");
+      cardsEl.appendChild(cardEl);
+    });
+  });
+}
+
+function applyRevealedCommunityCards(cards) {
+  const el = document.getElementById("community-cards");
+  el.innerHTML = "";
+  cards.forEach((c) => {
+    const cardEl = renderCard(c);
+    cardEl.classList.add("reveal-in");
+    el.appendChild(cardEl);
+  });
+}
+
+function applyShowdownBeat(lastHand) {
+  applyRevealedCommunityCards(lastHand.community_cards);
+  const winners = new Set(
+    Object.entries(lastHand.payouts || {})
+      .filter(([, amount]) => amount > 0)
+      .map(([pid]) => pid)
+  );
+  Object.entries(lastHand.revealed_hands || {}).forEach(([pid, cards]) => {
+    const seat = findSeatEl(pid);
+    if (!seat) return;
+    const cardsEl = seat.querySelector(".cards");
+    if (cardsEl) {
+      cardsEl.innerHTML = "";
+      cards.forEach((c) => {
+        const cardEl = renderCard(c);
+        cardEl.classList.add("reveal-in");
+        cardsEl.appendChild(cardEl);
+      });
+    }
+    let descEl = seat.querySelector(".showdown-desc");
+    if (!descEl) {
+      descEl = document.createElement("div");
+      descEl.className = "showdown-desc";
+      seat.appendChild(descEl);
+    }
+    descEl.textContent = (lastHand.hand_descriptions || {})[pid] || "";
+    const isWinner = winners.has(pid);
+    seat.classList.toggle("showdown-winner", isWinner);
+    if (isWinner) {
+      const nameEl = seat.querySelector(".name");
+      if (nameEl && !nameEl.querySelector(".badge.win")) {
+        const badge = document.createElement("span");
+        badge.className = "badge win";
+        badge.textContent = "wins";
+        nameEl.appendChild(badge);
+      }
+    }
+  });
+}
+
+async function runRevealSequence(lastHand, steps, hasShowdown) {
+  revealChainActive = true;
+  revealSkipRequested = false;
+
+  const actionsEl = document.getElementById("actions");
+  actionsEl.innerHTML = "";
+  const skipBtn = document.createElement("button");
+  skipBtn.className = "secondary";
+  skipBtn.textContent = "Skip";
+  skipBtn.onclick = () => {
+    revealSkipRequested = true;
+    if (pendingRevealResolve) {
+      const resolve = pendingRevealResolve;
+      pendingRevealResolve = null;
+      resolve();
+    }
+  };
+  actionsEl.appendChild(skipBtn);
+  document.getElementById("turn-hint").textContent = "Showing how that hand played out\u2026";
+  document.getElementById("pot-line").textContent =
+    `Hand #${lastHand.hand_number || ""} \u2014 here's how it played out`;
+
+  let shownCommunityCount = liveCommunityCount;
+  let shownHoleCardCounts = {};
+
+  for (const step of steps) {
+    const revealedHere = step.revealed_hole_cards || {};
+    const holeCardsChanged = Object.entries(revealedHere).some(
+      ([pid, cards]) => (shownHoleCardCounts[pid] || 0) !== cards.length
+    );
+    if (holeCardsChanged) {
+      applyRevealedHoleCards(revealedHere);
+      Object.entries(revealedHere).forEach(([pid, cards]) => {
+        shownHoleCardCounts[pid] = cards.length;
+      });
+      await revealSleep(1400);
+    }
+    if (step.community_cards.length > shownCommunityCount) {
+      applyRevealedCommunityCards(step.community_cards);
+      shownCommunityCount = step.community_cards.length;
+      await revealSleep(1400);
+    }
+  }
+
+  if (hasShowdown) {
+    applyShowdownBeat(lastHand);
+    await revealSleep(2400);
+  }
+
+  revealChainActive = false;
+  // Re-dispatch on whatever's most recently arrived rather than
+  // re-rendering the state this sequence was originally started from --
+  // another hand can in principle have already finished while this one
+  // was still playing out (e.g. very fast blind-forced all-ins back to
+  // back), and latestReceivedState is the only copy that could reflect
+  // that. render() itself is the right re-entry point rather than
+  // calling renderLastHandBanner/renderLiveState directly here, since it
+  // re-checks revealedHandNumber and will correctly kick off another
+  // reveal if latestReceivedState.last_hand has already moved on again.
+  render(latestReceivedState);
+}
+
 let lastShownHandKey = null;
 
 function render(state) {
+  updateHandHistoryCount(state);
+  latestReceivedState = state;
+  if (revealChainActive) return; // a reveal is already playing out; it re-dispatches on the freshest state once it finishes (see runRevealSequence above)
+
+  const lastHand = state.last_hand;
+  if (lastHand && lastHand.hand_number !== revealedHandNumber) {
+    revealedHandNumber = lastHand.hand_number;
+    const seatsAlreadyOnFelt = document.getElementById("seats").children.length > 0;
+    if (seatsAlreadyOnFelt) {
+      const steps = unseenRunoutSteps(lastHand.runout || [], liveCommunityCount);
+      const hasShowdown = Object.keys(lastHand.revealed_hands || {}).length > 0;
+      if (steps.length > 0 || hasShowdown) {
+        runRevealSequence(lastHand, steps, hasShowdown);
+        return;
+      }
+      // else: the hand ended by fold -- empty runout past the fold
+      // point, empty revealed_hands, nothing to replay. Fall through to
+      // the plain render below, same as always.
+    }
+    // else: this is this client's first-ever render, and last_hand
+    // already refers to a hand that finished before it connected -- a
+    // fresh page load or a reconnect that missed the whole thing. With
+    // no seats on the felt yet there's no live picture to animate on
+    // top of, so there's nothing to replay against; just catch up to
+    // the plain summary instead of reconstructing a reveal for history
+    // nobody here watched happen. (The seats that get rendered a few
+    // lines below, for whatever hand is live now, are what a *later*
+    // hand's reveal -- if there is one -- will animate on top of.)
+  }
+
+  renderLastHandBanner(lastHand);
+  renderLiveState(state);
+}
+
+function renderLiveState(state) {
   const communityEl = document.getElementById("community-cards");
   communityEl.innerHTML = "";
   const hand = state.hand;
-
-  renderLastHandBanner(state.last_hand);
-  updateHandHistoryCount(state);
 
   if (!hand) {
     document.getElementById("pot-line").textContent =
       state.status === "complete" ? "Tournament complete." : "Waiting for the next hand...";
     document.getElementById("seats").innerHTML = "";
     document.getElementById("actions").innerHTML = "";
+    liveCommunityCount = 0;
     return;
   }
 
   (hand.community_cards || []).forEach((c) => communityEl.appendChild(renderCard(c)));
+  liveCommunityCount = (hand.community_cards || []).length;
 
   if (hand.is_complete) {
     document.getElementById("pot-line").textContent = `Hand complete. Pot: ${hand.pot_total}`;
@@ -974,7 +1238,22 @@ function renderHandHistory(data) {
       detail.appendChild(historyRow("Board", historyCards(h.community_cards)));
     }
     Object.entries(h.revealed_hands || {}).forEach(([pid, cards]) => {
-      detail.appendChild(historyRow(shortId(pid), historyCards(cards)));
+      const wrap = document.createElement("span");
+      wrap.style.display = "flex";
+      wrap.style.alignItems = "center";
+      wrap.style.gap = "0.5rem";
+      wrap.style.flexWrap = "wrap";
+      wrap.appendChild(historyCards(cards));
+      const desc = (h.hand_descriptions || {})[pid];
+      if (desc) {
+        const descSpan = document.createElement("span");
+        descSpan.className = "history-hand-desc";
+        descSpan.textContent = desc;
+        wrap.appendChild(descSpan);
+      }
+      const row = historyRow(shortId(pid), wrap);
+      if (h.payouts && h.payouts[pid] > 0) row.classList.add("history-winner-row");
+      detail.appendChild(row);
     });
     if (h.folded_players && h.folded_players.length) {
       const foldedSpan = document.createElement("span");
@@ -1013,6 +1292,14 @@ function renderSeats(hand) {
       (p.player_id === playerId ? " you" : "") +
       (p.player_id === hand.current_actor ? " active" : "") +
       (p.folded ? " folded" : "");
+    // Lookup hook for the hand reveal sequence (see below): it mutates
+    // these same seat elements in place (swapping card-backs for
+    // revealed cards, adding a description) rather than re-rendering
+    // the whole seats list, since by the time there's something to
+    // reveal about a just-finished hand, `hand` here already refers to
+    // the NEXT hand -- there's no player list for the finished one to
+    // rebuild from.
+    seat.dataset.playerId = p.player_id;
     seat.style.left = `calc(${left}% - 65px)`;
     seat.style.top = `calc(${top}% - 30px)`;
 
