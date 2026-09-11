@@ -60,6 +60,65 @@ class OrchestratorError(Exception):
 # Hand
 # ---------------------------------------------------------------------------
 
+# The only Street values a RunoutStep (below) is ever recorded for -- the
+# ones that change what's actually visible on the board, or (from the
+# moment no further betting is possible) in players' hands. Deliberately
+# excludes DEAL_FOURTH_STREET_FACEDOWN / DEAL_FIFTH_STREET_FACEDOWN --
+# those put a card in the dealer's hand that's still hidden from
+# everyone, by the game's own front-loaded-dealing design (see
+# betting_state_machine.py's module docstring) -- and every betting
+# street plus SHOWDOWN/HAND_COMPLETE, none of which deal or reveal a new
+# card at the moment the street itself changes.
+RUNOUT_STREETS = {
+    Street.DEAL_FLOP,
+    Street.DEAL_THIRD_HOLE_CARD,
+    Street.REVEAL_FOURTH_STREET,
+    Street.REVEAL_FIFTH_STREET,
+}
+
+
+@dataclass
+class RunoutStep:
+    """
+    One purely-descriptive checkpoint in a hand's runout -- see
+    RUNOUT_STREETS above for exactly which Street values ever produce
+    one, and why. Recorded synchronously, the instant it actually
+    happens inside Hand._handle_dealing_for(), the same way every other
+    piece of state in this engine is touched (see
+    betting_state_machine.py's own module docstring on why HandFlow /
+    BettingRound stay fully synchronous) -- nothing here introduces a
+    delay or a pause anywhere in the engine itself.
+
+    It exists so a hand that fast-forwards through several streets
+    inside a single apply_action() call -- the common case: an early
+    all-in, where no further betting decision is possible and
+    Hand._progress() races straight through to _finalize() -- still
+    leaves behind a step-by-step record of what happened and when, for
+    a client to animate through at its own pace afterward. See
+    POLISH_PLAN.md's Phase 0.5 for the client-side piece (0.5c) this is
+    laying the groundwork for; it is NOT built as of this change -- see
+    HANDOFF.md.
+
+    A hand that was never fast-forwarded (every street paced by a real
+    decision) produces an identically-shaped runout, just built up one
+    step at a time across several calls instead of several steps inside
+    one -- so a client never needs two different code paths for
+    "there's a runout to replay" vs. "nothing changed, I already saw
+    all of this live."
+    """
+
+    street: Street
+    community_cards: List[Card]
+    # Every remaining active (non-folded) player's hole cards -- but
+    # only from the moment no further betting decision is possible
+    # (every remaining active player is all-in). Empty on every step of
+    # a hand that's checked all the way down without anyone going
+    # all-in -- there, hole cards only ever become public at the real
+    # showdown, via HandResult.revealed_hands, unaffected by this. See
+    # Hand._record_runout_step's own docstring for the exact condition.
+    revealed_hole_cards: Dict[str, List[Card]] = field(default_factory=dict)
+
+
 @dataclass
 class HandResult:
     payouts: Dict[str, int]
@@ -69,6 +128,12 @@ class HandResult:
     pots: List[Pot]
     folded_players: List[str]
     final_stacks: Dict[str, int]
+    # Defaults to empty rather than being required: several existing
+    # call sites (test_analytics.py's HandResult(...) fixtures, in
+    # particular) construct a HandResult directly without a Hand behind
+    # it at all, and have no runout to give -- a required field here
+    # would break them for no benefit, since analytics never reads this.
+    runout: List[RunoutStep] = field(default_factory=list)
 
 
 class Hand:
@@ -117,6 +182,7 @@ class Hand:
         self._fifth_street_card: Optional[Card] = None
         self._fold_street: Dict[str, Street] = {}
         self.rabbit_hunts: Dict[str, int] = {}
+        self.runout: List[RunoutStep] = []
         self.result: Optional[HandResult] = None
 
         self.flow = HandFlow(
@@ -293,6 +359,38 @@ class Hand:
         # flow.advance() already started the round (correctly, "left of
         # button" is right for every street except preflop).
         # SHOWDOWN / HAND_COMPLETE: handled by _finalize(), not here.
+        self._record_runout_step(street)
+
+    def _record_runout_step(self, street: Street) -> None:
+        """
+        Appends a RunoutStep for `street` if -- and only if -- it's one
+        of the four streets in RUNOUT_STREETS. Called unconditionally
+        from _handle_dealing_for() for every street (including the ones
+        it otherwise no-ops on), so a normally-paced hand builds up
+        exactly the same shape of runout a fast-forwarded all-in hand
+        does -- see RunoutStep's own docstring for why that matters.
+
+        A hand that ends by fold naturally stops adding steps at the
+        point of the fold: HandFlow.advance() jumps straight to
+        HAND_COMPLETE the moment only one player remains (see its own
+        implementation), so _handle_dealing_for() -- and therefore this
+        method -- is simply never called again for that hand. No
+        special-casing is needed here to "stop early"; there's nothing
+        past the fold to record in the first place.
+        """
+        if street not in RUNOUT_STREETS:
+            return
+        active = [p for p in self.player_states if not p.folded]
+        revealed: Dict[str, List[Card]] = {}
+        if len(active) > 1 and all(p.all_in for p in active):
+            revealed = {p.player_id: list(p.hole_cards) for p in active}
+        self.runout.append(
+            RunoutStep(
+                street=street,
+                community_cards=list(self.community_cards),
+                revealed_hole_cards=revealed,
+            )
+        )
 
     # -- internal: flow control -----------------------------------------
 
@@ -332,6 +430,7 @@ class Hand:
                 pots=[],
                 folded_players=folded_ids,
                 final_stacks=self.final_stacks(),
+                runout=list(self.runout),
             )
             return
 
@@ -364,6 +463,7 @@ class Hand:
             pots=pots,
             folded_players=folded_ids,
             final_stacks=self.final_stacks(),
+            runout=list(self.runout),
         )
 
     def _player(self, player_id: str) -> PlayerState:

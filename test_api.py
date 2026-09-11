@@ -1220,3 +1220,124 @@ def test_hand_history_storage_is_capped_but_lifetime_count_is_not(monkeypatch):
     assert history["total_hands_played"] == 5
     assert len(history["hands"]) == 2
     assert [h["hand_number"] for h in history["hands"]] == [5, 4]
+
+
+# ---------------------------------------------------------------------------
+# Runout & showdown hand descriptions (see POLISH_PLAN.md Phase 0.5a/0.5b,
+# orchestrator.RunoutStep, and hand_evaluator.describe_hand_rank)
+#
+# The engine-level behavior -- exactly which streets produce a runout
+# step, when hole cards get revealed early, the exact wording of each
+# description -- is covered in test_orchestrator.py and
+# test_hand_evaluator.py instead. These just confirm both actually reach
+# the API surface a client would read, on both `last_hand` and the
+# persistent /tables/{id}/hands log, the same split test_orchestrator.py
+# / test_api.py already use for every other engine-vs-API feature in
+# this project (bet visibility, hand history, rabbit hunt, ...).
+# ---------------------------------------------------------------------------
+
+def test_hand_history_entry_includes_runout_for_a_checked_down_hand():
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    _play_to_first_hand_completion(table_id)
+
+    entry = client.get(f"/tables/{table_id}/hands").json()["hands"][0]
+    streets = [step["street"] for step in entry["runout"]]
+    assert streets == ["DEAL_FLOP", "DEAL_THIRD_HOLE_CARD", "REVEAL_FOURTH_STREET", "REVEAL_FIFTH_STREET"]
+    assert [len(step["community_cards"]) for step in entry["runout"]] == [3, 3, 4, 5]
+
+
+def test_runout_reveals_both_hole_card_sets_once_both_players_are_all_in():
+    table_id = make_table(max_seats=2, starting_stack=10)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    state = client.get(f"/tables/{table_id}/state").json()
+    actor = state["hand"]["current_actor"]
+    other = p1 if actor == p0 else p0
+    client.post(f"/tables/{table_id}/actions", json={"player_id": actor, "action_type": "ALL_IN"})
+    resp = client.post(f"/tables/{table_id}/actions", json={"player_id": other, "action_type": "ALL_IN"})
+    assert resp.json()["last_hand"] is not None  # confirms the hand actually finished on this action
+
+    entry = client.get(f"/tables/{table_id}/hands").json()["hands"][0]
+    assert entry["runout"], "expected at least one runout step for an all-in hand"
+    assert set(entry["runout"][0]["revealed_hole_cards"].keys()) == {p0, p1}
+
+
+def test_runout_is_empty_when_the_hand_ends_by_a_preflop_fold():
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    state = client.get(f"/tables/{table_id}/state").json()
+    folder = state["hand"]["current_actor"]
+    client.post(f"/tables/{table_id}/actions", json={"player_id": folder, "action_type": "FOLD"})
+
+    entry = client.get(f"/tables/{table_id}/hands").json()["hands"][0]
+    assert entry["runout"] == []
+
+
+def test_last_hand_includes_the_same_runout_as_the_history_entry():
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    _play_to_first_hand_completion(table_id)
+
+    state = client.get(f"/tables/{table_id}/state").json()
+    entry = client.get(f"/tables/{table_id}/hands").json()["hands"][0]
+    assert state["last_hand"]["runout"] == entry["runout"]
+
+
+def test_hand_history_entry_includes_showdown_hand_descriptions():
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    _play_to_first_hand_completion(table_id)
+
+    entry = client.get(f"/tables/{table_id}/hands").json()["hands"][0]
+    assert set(entry["hand_descriptions"].keys()) == set(entry["revealed_hands"].keys())
+    assert entry["hand_descriptions"], "a checked-down hand should reach a real showdown"
+    assert all(isinstance(v, str) and v for v in entry["hand_descriptions"].values())
+
+
+def test_hand_descriptions_empty_when_the_hand_ends_by_fold():
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    state = client.get(f"/tables/{table_id}/state").json()
+    folder = state["hand"]["current_actor"]
+    client.post(f"/tables/{table_id}/actions", json={"player_id": folder, "action_type": "FOLD"})
+
+    entry = client.get(f"/tables/{table_id}/hands").json()["hands"][0]
+    assert entry["hand_descriptions"] == {}
+
+
+def test_last_hand_hand_descriptions_match_the_history_entry():
+    table_id = make_table(max_seats=2, starting_stack=1000)
+    p0, p1 = make_guest(), make_guest()
+    join(table_id, p0)
+    join(table_id, p1)
+    client.post(f"/tables/{table_id}/start")
+
+    _play_to_first_hand_completion(table_id)
+
+    state = client.get(f"/tables/{table_id}/state").json()
+    entry = client.get(f"/tables/{table_id}/hands").json()["hands"][0]
+    assert state["last_hand"]["hand_descriptions"] == entry["hand_descriptions"]

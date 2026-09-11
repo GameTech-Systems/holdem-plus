@@ -16,7 +16,7 @@ import pytest
 
 from itertools import combinations
 
-from hand_evaluator import evaluate_5, evaluate_best_of
+from hand_evaluator import describe_hand_rank, evaluate_5, evaluate_best_of
 from poker_types import HandCategory, parse_cards
 
 
@@ -196,3 +196,41 @@ def test_no_duplicate_cards_across_hole_and_community_is_caller_responsibility()
     cards_with_duplicate = parse_cards("Ah Ah Kd Qc Js 9h 4d 2s")
     # Should not raise -- it just evaluates the 8 cards it was given.
     evaluate_best_of(cards_with_duplicate)
+
+
+# ---------------------------------------------------------------------------
+# describe_hand_rank -- player-facing hand descriptions (POLISH_PLAN.md
+# Phase 0.5b)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "cards, expected_description",
+    [
+        ("9h 8h 7h 6h 5h", "Straight Flush, Nine-high"),
+        ("9c 9d 9h 9s 2c", "Four of a Kind, Nines"),
+        ("Kc Kd Kh 4s 4c", "Full House, Kings full of Fours"),
+        ("2h 5h 9h Jh Kh", "Flush, King-high"),
+        ("Ah Kd Qc Js Th", "Straight, Ace-high"),
+        ("5c 4d 3h 2s Ah", "Straight, Five-high"),  # the wheel plays 5-high
+        ("7c 7d 7h Ks 2c", "Three of a Kind, Sevens"),
+        ("Jc Jd 4h 4s 9c", "Two Pair, Jacks and Fours"),
+        ("Qc Qd 9h 4s 2c", "Pair of Queens"),
+        ("Ac Kd 9h 4s 2c", "High Card, Ace"),
+    ],
+)
+def test_describe_hand_rank_covers_every_category_with_the_right_wording(cards, expected_description):
+    """One example per HandCategory (plus the wheel-straight edge case),
+    matching test_category_identification's own per-category coverage
+    above -- every category must produce a real, specific string."""
+    rank = evaluate_5(parse_cards(cards))
+    assert describe_hand_rank(rank) == expected_description
+
+
+def test_describe_hand_rank_full_house_names_trips_before_pair():
+    """A-A-A-K-K must read 'Aces full of Kings', not the reverse --
+    the same point test_full_house_ranked_by_trips_not_pair makes about
+    comparison, here applied to the description's wording instead."""
+    aces_full = evaluate_5(parse_cards("Ac Ad Ah Ks Kc"))
+    kings_full = evaluate_5(parse_cards("Kc Kd Kh 2s 2c"))
+    assert describe_hand_rank(aces_full) == "Full House, Aces full of Kings"
+    assert describe_hand_rank(kings_full) == "Full House, Kings full of Twos"

@@ -107,6 +107,66 @@ def evaluate_best_of(cards: Sequence[Card]) -> HandRank:
     return max(evaluate_5(combo) for combo in combinations(cards, 5))
 
 
+# Rank-name lookup tables for describe_hand_rank() below -- plain
+# dictionaries rather than a pluralization algorithm, on purpose:
+# English plurals of card ranks have no irregularities here ("Six" ->
+# "Sixes" is the only mildly-irregular one), but a direct table is
+# still simpler to audit at a glance than any rule would be, matching
+# this module's own stated preference for straightforward over clever.
+_RANK_NAMES = {
+    2: "Two", 3: "Three", 4: "Four", 5: "Five", 6: "Six", 7: "Seven",
+    8: "Eight", 9: "Nine", 10: "Ten", 11: "Jack", 12: "Queen", 13: "King",
+    14: "Ace",
+}
+_RANK_PLURALS = {
+    2: "Twos", 3: "Threes", 4: "Fours", 5: "Fives", 6: "Sixes", 7: "Sevens",
+    8: "Eights", 9: "Nines", 10: "Tens", 11: "Jacks", 12: "Queens",
+    13: "Kings", 14: "Aces",
+}
+
+
+def describe_hand_rank(rank: HandRank) -> str:
+    """
+    Human-readable description of a HandRank, e.g. "Full House, Aces
+    full of Kings" or "Two Pair, Jacks and Fours" -- the specific
+    player-facing strings POLISH_PLAN.md's Phase 0.5b calls for next to
+    each revealed hand at showdown.
+
+    Deliberately separate from HandRank.__repr__ (poker_types.py), which
+    stays a compact, programmer-facing repr (e.g. "FULL_HOUSE(13, 12)")
+    used for engine-side debugging/printing (see example_usage.py) --
+    changing this function's wording should never risk changing what
+    __repr__ prints for debugging, or vice versa.
+
+    Every HandCategory has a real branch below; there's no silent
+    fallback. If a future HandCategory is ever added to poker_types.py
+    without a matching branch here, this raises rather than returning
+    something misleading -- the same "surface a bug loudly rather than
+    paper over it" preference side_pots.SidePotError already documents
+    for this codebase.
+    """
+    tb = rank.tiebreak
+    if rank.category == HandCategory.STRAIGHT_FLUSH:
+        return f"Straight Flush, {_RANK_NAMES[tb[0]]}-high"
+    if rank.category == HandCategory.QUADS:
+        return f"Four of a Kind, {_RANK_PLURALS[tb[0]]}"
+    if rank.category == HandCategory.FULL_HOUSE:
+        return f"Full House, {_RANK_PLURALS[tb[0]]} full of {_RANK_PLURALS[tb[1]]}"
+    if rank.category == HandCategory.FLUSH:
+        return f"Flush, {_RANK_NAMES[tb[0]]}-high"
+    if rank.category == HandCategory.STRAIGHT:
+        return f"Straight, {_RANK_NAMES[tb[0]]}-high"
+    if rank.category == HandCategory.TRIPS:
+        return f"Three of a Kind, {_RANK_PLURALS[tb[0]]}"
+    if rank.category == HandCategory.TWO_PAIR:
+        return f"Two Pair, {_RANK_PLURALS[tb[0]]} and {_RANK_PLURALS[tb[1]]}"
+    if rank.category == HandCategory.PAIR:
+        return f"Pair of {_RANK_PLURALS[tb[0]]}"
+    if rank.category == HandCategory.HIGH_CARD:
+        return f"High Card, {_RANK_NAMES[tb[0]]}"
+    raise ValueError(f"No description implemented for category {rank.category!r}")
+
+
 # NOTE on performance:
 # This implementation re-evaluates from scratch every call, and for 8 cards
 # checks all C(8,5) = 56 combinations. That's more than fast enough for

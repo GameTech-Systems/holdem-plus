@@ -44,7 +44,8 @@ from pydantic import BaseModel
 from analytics import AnalyticsLog, build_hand_record, simulate_standard_holdem_baseline
 from betting_state_machine import ActionType, BETTING_STREETS, IllegalActionError
 from demo_showcase import build_demo_script, serialize_demo_script
-from orchestrator import Hand, HandResult, OrchestratorError, Tournament
+from hand_evaluator import describe_hand_rank, evaluate_best_of
+from orchestrator import Hand, HandResult, OrchestratorError, RunoutStep, Tournament
 from poker_types import Card
 from tournament_structure import generate_default_schedule
 
@@ -361,6 +362,62 @@ class FeedbackRequest(BaseModel):
 # State serialization -- redacts hole cards the viewer isn't allowed to see
 # ---------------------------------------------------------------------------
 
+def _serialize_runout(runout: List[RunoutStep]) -> List[dict]:
+    """
+    Serializes Hand.runout / HandResult.runout for both `last_hand` and
+    each /tables/{id}/hands entry -- see RunoutStep's own docstring in
+    orchestrator.py for what a step represents and exactly which Street
+    values ever produce one (orchestrator.RUNOUT_STREETS). Empty for a
+    hand that ended by fold before reaching any of those streets -- see
+    Hand._record_runout_step's docstring for why that's automatic rather
+    than something this layer needs to special-case.
+
+    This is the backend half of POLISH_PLAN.md's Phase 0.5 (0.5a): costs
+    nothing for a normally-paced hand (a client watching live already
+    saw each of these happen, one state push at a time) but is exactly
+    the missing information for a hand that fast-forwarded through some
+    or all of them inside a single request -- most commonly an early
+    all-in. The frontend piece that actually replays this (0.5c) is not
+    built as of this change -- see HANDOFF.md.
+    """
+    return [
+        {
+            "street": step.street.name,
+            "community_cards": [str(c) for c in step.community_cards],
+            "revealed_hole_cards": {
+                pid: [str(c) for c in cards]
+                for pid, cards in step.revealed_hole_cards.items()
+            },
+        }
+        for step in runout
+    ]
+
+
+def _showdown_hand_descriptions(result: HandResult) -> Dict[str, str]:
+    """
+    Player-facing hand-strength description for every revealed hand in a
+    finished hand's showdown -- e.g. "Two Pair, Jacks and Fours" -- the
+    other half of POLISH_PLAN.md's Phase 0.5 (0.5b). Recomputed here from
+    HandResult.revealed_hands + community_cards the same way
+    analytics.build_hand_record already recomputes each showdown hand's
+    HandCategory (see that function's own docstring for why recomputing
+    -- a handful of cheap best-5-of-8 comparisons, done once per finished
+    hand, nowhere near a hot path -- is preferable to threading full hand
+    ranks through HandResult itself). Empty for a hand that ended by fold
+    before any showdown, matching revealed_hands being empty in that
+    case too -- there's nothing to describe.
+
+    Which revealed hand(s) actually won is deliberately not duplicated
+    here as a separate flag: the same information is already in
+    `payouts` (a pid with payouts.get(pid, 0) > 0 won at least one pot),
+    which every caller of this already has sitting right next to it.
+    """
+    return {
+        pid: describe_hand_rank(evaluate_best_of(list(hole_cards) + list(result.community_cards)))
+        for pid, hole_cards in result.revealed_hands.items()
+    }
+
+
 def _serialize_hand_result(
     result: HandResult,
     hand: Optional[Hand],
@@ -394,6 +451,10 @@ def _serialize_hand_result(
     filled up to 5 cards. Cross-referencing against the same hand_number
     shown in the persistent /tables/{id}/hands log removes that
     ambiguity instead of changing the underlying eligibility window.
+
+    `hand_descriptions` and `runout` are the two POLISH_PLAN.md Phase 0.5
+    additions -- see _showdown_hand_descriptions and _serialize_runout
+    above for what each holds and why they're computed the way they are.
     """
     rabbit_hunt_eligible = (
         hand is not None
@@ -409,8 +470,10 @@ def _serialize_hand_result(
         "revealed_hands": {
             pid: [str(c) for c in cards] for pid, cards in result.revealed_hands.items()
         },
+        "hand_descriptions": _showdown_hand_descriptions(result),
         "folded_players": list(result.folded_players),
         "rabbit_hunt_eligible": rabbit_hunt_eligible,
+        "runout": _serialize_runout(result.runout),
     }
 
 
@@ -427,6 +490,9 @@ def _serialize_hand_history_entry(entry: HandHistoryEntry) -> dict:
     from the history log, so that question doesn't apply to entries here
     at all. If a rabbit hunt *was* used while this hand still was the
     most recent one, its permanent record lives in entry.rabbit_hunt.
+
+    `hand_descriptions` and `runout` are the two POLISH_PLAN.md Phase 0.5
+    additions, computed the same way as on _serialize_hand_result above.
     """
     result = entry.result
     return {
@@ -438,8 +504,10 @@ def _serialize_hand_history_entry(entry: HandHistoryEntry) -> dict:
         "revealed_hands": {
             pid: [str(c) for c in cards] for pid, cards in result.revealed_hands.items()
         },
+        "hand_descriptions": _showdown_hand_descriptions(result),
         "folded_players": list(result.folded_players),
         "rabbit_hunt": entry.rabbit_hunt,
+        "runout": _serialize_runout(result.runout),
     }
 
 

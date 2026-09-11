@@ -8,7 +8,7 @@ import random
 
 import pytest
 
-from betting_state_machine import ActionType, IllegalActionError
+from betting_state_machine import ActionType, IllegalActionError, Street
 from orchestrator import (
     Hand,
     OrchestratorError,
@@ -286,6 +286,125 @@ def test_all_in_preflop_heads_up_runs_board_out_automatically():
     assert hand.is_complete
     assert len(hand.community_cards) == 5
     assert sum(hand.result.payouts.values()) == 20
+
+
+# ---------------------------------------------------------------------------
+# Hand: runout (POLISH_PLAN.md Phase 0.5a)
+# ---------------------------------------------------------------------------
+
+_RUNOUT_STREET_SEQUENCE = [
+    Street.DEAL_FLOP,
+    Street.DEAL_THIRD_HOLE_CARD,
+    Street.REVEAL_FOURTH_STREET,
+    Street.REVEAL_FIFTH_STREET,
+]
+
+
+def test_all_in_preflop_runout_has_one_step_per_street_with_hole_cards_from_the_start():
+    hand = Hand(
+        seat_order=[("p0", 10), ("p1", 10)],
+        button_index=0,
+        small_blind=1,
+        big_blind=2,
+        rng=random.Random(11),
+    )
+    hand.apply_action("p0", ActionType.ALL_IN)
+    hand.apply_action("p1", ActionType.ALL_IN)
+    assert hand.is_complete
+
+    assert [step.street for step in hand.runout] == _RUNOUT_STREET_SEQUENCE
+    assert [len(step.community_cards) for step in hand.runout] == [3, 3, 4, 5]
+    # both players were already locked in (all-in, nothing left to
+    # decide) before the very first step even ran, so every step --
+    # starting with the flop -- has both hole-card sets exposed, not
+    # just the last one before showdown.
+    for step in hand.runout:
+        assert set(step.revealed_hole_cards.keys()) == {"p0", "p1"}
+
+    # HandResult.runout is a snapshot taken the moment _finalize() ran,
+    # not a live reference -- confirm it actually got threaded through
+    # rather than silently staying the HandResult default ([]).
+    assert hand.result.runout == hand.runout
+    assert hand.result.runout is not hand.runout
+
+
+def test_checked_down_hand_runout_has_one_step_per_street_with_no_early_reveal():
+    hand = Hand(
+        seat_order=[("p0", 1000), ("p1", 1000), ("p2", 1000)],
+        button_index=0,
+        small_blind=1,
+        big_blind=2,
+        rng=random.Random(7),
+    )
+    play_out_with_bots(hand)
+    assert hand.is_complete
+    # confirms this scenario actually exercises "nobody went all-in" --
+    # the reference bot policy always checks/calls small amounts here,
+    # never shoving a 1000-chip stack, so the runout's early-reveal
+    # condition should never trigger below.
+    assert all(not p.all_in for p in hand.player_states)
+
+    assert [step.street for step in hand.runout] == _RUNOUT_STREET_SEQUENCE
+    assert [len(step.community_cards) for step in hand.runout] == [3, 3, 4, 5]
+    # hole cards only ever become public at the real showdown (via
+    # hand.result.revealed_hands) for a hand like this one -- no step
+    # should reveal anything early.
+    assert all(step.revealed_hole_cards == {} for step in hand.runout)
+
+
+def test_fold_after_flop_stops_the_runout_at_the_point_of_the_fold():
+    hand = Hand(
+        seat_order=[("p0", 1000), ("p1", 1000), ("p2", 1000)],
+        button_index=0,
+        small_blind=1,
+        big_blind=2,
+        rng=random.Random(7),
+    )
+    hand.apply_action("p0", ActionType.CALL)
+    hand.apply_action("p1", ActionType.CALL)
+    hand.apply_action("p2", ActionType.CHECK)  # closes preflop
+    assert not hand.is_complete
+    # the flop and 3rd hole cards are both dealt automatically before
+    # flop betting opens -- the runout should already reflect exactly
+    # those two steps.
+    assert [step.street for step in hand.runout] == [
+        Street.DEAL_FLOP,
+        Street.DEAL_THIRD_HOLE_CARD,
+    ]
+
+    actor = hand.current_actor_id
+    hand.apply_action(actor, ActionType.BET, amount=20)
+    for _ in range(2):
+        actor = hand.current_actor_id
+        hand.apply_action(actor, ActionType.FOLD)
+
+    assert hand.is_complete
+    assert len(hand.result.folded_players) == 2
+    # folding down to one player ends the hand immediately, via
+    # HandFlow's own "everyone else folded" logic, without ever
+    # reaching REVEAL_FOURTH_STREET / REVEAL_FIFTH_STREET -- nothing
+    # here should fabricate steps for streets the hand never visited.
+    assert [step.street for step in hand.runout] == [
+        Street.DEAL_FLOP,
+        Street.DEAL_THIRD_HOLE_CARD,
+    ]
+
+
+def test_immediate_preflop_fold_out_hand_has_an_empty_runout():
+    hand = Hand(
+        seat_order=[("p0", 1000), ("p1", 1000), ("p2", 1000)],
+        button_index=0,
+        small_blind=1,
+        big_blind=2,
+        rng=random.Random(3),
+    )
+    hand.apply_action("p0", ActionType.FOLD)
+    hand.apply_action("p1", ActionType.FOLD)
+    assert hand.is_complete
+    # community cards are never dealt at all when a hand ends preflop --
+    # there's nothing for the runout to record.
+    assert hand.runout == []
+    assert hand.result.runout == []
 
 
 # ---------------------------------------------------------------------------

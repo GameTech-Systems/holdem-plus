@@ -25,7 +25,7 @@ demo_showcase.py            two scripted, deterministic showcase hands for
                              the public demo landing page (GET /demo/script)
 api.py                      REST + WebSocket layer over the orchestrator
 example_usage.py            runnable script showing the orchestrator API
-test_*.py                   222 tests, pytest
+test_*.py                   244 tests, pytest
 requirements.txt            fastapi / uvicorn / pydantic / pytest / httpx
 Dockerfile, .dockerignore   container image (Fly.io / Railway / Render-Docker)
 render.yaml                 Render Blueprint (native Python runtime)
@@ -35,17 +35,18 @@ DEPLOYMENT.md                step-by-step deploy instructions for all three
 ```
 
 Every module above the API layer is dependency-free standard-library
-Python. All 222 tests pass as of this handoff (218 prior + 4 added this
-session for live bet/pot visibility and the "last hand" banner's hand
-number -- see `HANDOFF.md` for the full rundown, and for what shipped in
-earlier sessions: the hand-history log, the demo landing page, the
-analytics/instrumentation layer, the real-time blind-clock fix, and so on).
+Python. All 244 tests pass as of this handoff (222 prior + 22 added this
+session for the hand-runout log and showdown hand descriptions -- see
+`HANDOFF.md` for the full rundown, and for what shipped in earlier
+sessions: live bet/pot visibility, the hand-history log, the demo
+landing page, the analytics/instrumentation layer, the real-time
+blind-clock fix, and so on).
 
 ## Running it
 
 ```bash
 pip install -r requirements.txt
-pytest -q                        # 222 passed
+pytest -q                        # 244 passed
 python3 example_usage.py         # orchestrator demo, no network
 uvicorn api:app --reload         # real server on http://127.0.0.1:8000
 ```
@@ -130,6 +131,35 @@ banner and any Rabbit Runner offer riding along with it stay visible for
 the *entire* next hand's duration by design, so labeling exactly which
 hand they refer to (rather than just "Last hand:") matters once that
 next hand's own board has also filled up to 5 cards.
+
+## Hand runout & showdown descriptions
+
+`last_hand` and every `/tables/<table_id>/hands` entry now also carry
+`runout` and `hand_descriptions`.
+
+`runout` is a step-by-step record of the flop, 3rd hole card, turn
+reveal, and river reveal -- each step has the community cards as of
+that point, and, from the moment no further betting decision was
+possible (every remaining player all-in), every remaining player's hole
+cards. It exists specifically for hands that fast-forward through
+several streets inside a single request -- the common case: an early
+all-in -- where the response would otherwise land with a full board and
+no way to reconstruct what happened street by street. A normally-paced
+hand produces the identical shape, just built up one live state push at
+a time instead of all at once, so a client never needs two different
+code paths for "there's something to replay" vs. "nothing changed, I
+already saw all of this live." Empty for a hand that ends by fold before
+reaching any of those streets. This is the backend half of
+`POLISH_PLAN.md`'s Phase 0.5 -- the frontend piece that actually
+animates it on the felt (0.5c) isn't built yet; see `HANDOFF.md`.
+
+`hand_descriptions` is a player-facing description of each revealed hand
+at showdown (`"Two Pair, Jacks and Fours"`, `"Full House, Aces full of
+Kings"`, ...), keyed the same way as `revealed_hands`. Whether a
+particular revealed hand won isn't duplicated here as its own flag --
+cross-reference `payouts`, which every caller of this already has right
+alongside it. Both fields are empty for a hand that ends by fold, where
+there's nothing to reveal or describe.
 
 ## Analytics / instrumentation
 

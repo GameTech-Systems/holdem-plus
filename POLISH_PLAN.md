@@ -145,56 +145,102 @@ record what already happened at each street transition into a new,
 purely-descriptive log, and let the *client* animate through that log
 at its own pace after the fact:
 
-- **0.5a (backend, no frontend work):** add a `RunoutStep` dataclass and
-  a `Hand.runout: List[RunoutStep]` field. Every time
-  `_handle_dealing_for()` runs — i.e. on every street transition, not
-  just fast-forwarded ones, so the frontend never needs two code paths —
-  append a step capturing the street, `community_cards` as of that step,
-  and, only from the moment no further betting action is possible
-  (`all(p.all_in or p.folded for p in the active players)`), each
-  remaining active player's hole cards (so an all-in reveal shows hands
-  turned up before the board runs out, matching a live table). Thread
-  `runout` through `HandResult` so `api.py` can serialize it onto both
-  `last_hand` and `HandHistoryEntry` — it costs nothing for a normally-
-  paced hand (the client already saw each state live) but is exactly
-  the missing information for a fast-forwarded one. New tests in
-  `test_orchestrator.py`: an all-in-preflop runout has one step per
+- [x] **0.5a (backend, no frontend work) — shipped.** Added a
+  `RunoutStep` dataclass and a `Hand.runout: List[RunoutStep]` field in
+  `orchestrator.py`. `_handle_dealing_for()` calls a new
+  `Hand._record_runout_step()` unconditionally at the end, for every
+  street transition (not just fast-forwarded ones, so the frontend never
+  needs two code paths) — it appends a step only for the four streets
+  that actually change what's visible (`orchestrator.RUNOUT_STREETS`:
+  `DEAL_FLOP`, `DEAL_THIRD_HOLE_CARD`, `REVEAL_FOURTH_STREET`,
+  `REVEAL_FIFTH_STREET`), capturing that street, `community_cards` as of
+  that step, and — only from the moment no further betting decision is
+  possible — every remaining active player's hole cards. The actual
+  condition landed as `len(active) > 1 and all(p.all_in for p in
+  active)`, where `active` is this codebase's existing
+  not-yet-folded convention (see `Hand._finalize`); the design note
+  above phrased it as `all(p.all_in or p.folded for p in the active
+  players)`, but since "active" already means non-folded everywhere else
+  in this file, that reduces to the same check — worth flagging here in
+  case a future reader diffs the two phrasings and wonders. `runout` is
+  threaded through `HandResult` (defaults to `[]` so
+  `test_analytics.py`'s direct `HandResult(...)` fixtures didn't need
+  touching) and serialized by `api.py` onto both `last_hand` and every
+  `/tables/{id}/hands` entry as a `runout` list of `{street,
+  community_cards, revealed_hole_cards}` objects. Tests:
+  `test_orchestrator.py` (an all-in-preflop runout has one step per
   street with the right community-card counts and both hole-card sets
-  exposed from the first step onward; a hand that never goes all-in
-  still produces a step per street; a hand that ends by fold before
-  showdown stops its runout at the fold, with no fabricated steps past
-  it.
-- **0.5b (showdown hand descriptions — smaller, stands alone):** compute
-  each revealed hand's category/description
-  (`hand_evaluator.evaluate_best_of` already returns this; it just isn't
-  surfaced anywhere) and add it next to each revealed hand at showdown,
-  with the winning hand(s) visually marked, in both the live felt and
-  the hand-history panel. Useful on its own even before 0.5a/0.5c land.
-- **0.5c (frontend, needs 0.5a):** in `static/index.html`, when a hand's
-  `last_hand` arrives with more runout steps than the client actually
-  observed live (exactly the fast-forwarded case), play them back on the
+  exposed from the first step onward; a checked-down hand that never
+  goes all-in still produces a step per street with nothing revealed
+  early; a hand that folds after the flop stops its runout at exactly
+  that point; an immediate preflop fold-out has an empty runout) and
+  `test_api.py` (the same shape reaches `last_hand` and the history log,
+  identically, and is empty for a folded hand). Also hand-verified over
+  a real `TestClient` HTTP round trip, both a checked-down hand and a
+  heads-up all-in — see `HANDOFF.md` for the exact output. **244 passed**
+  (222 + 22 new) after this and 0.5b together, no regressions.
+- [x] **0.5b (showdown hand descriptions — smaller, stands alone) —
+  shipped.** Added `hand_evaluator.describe_hand_rank(rank: HandRank) ->
+  str`, e.g. `"Full House, Aces full of Kings"` or `"Two Pair, Jacks and
+  Fours"` — a real branch per `HandCategory`, via two small rank-name
+  lookup tables (`_RANK_NAMES`/`_RANK_PLURALS`), raising rather than
+  falling back silently if a category is ever added without a matching
+  branch. `api.py` recomputes each revealed hand's description the same
+  way `analytics.build_hand_record` already recomputes categories (a
+  cheap `evaluate_best_of` call per revealed hand, once per finished
+  hand, nowhere near a hot path) and adds it as a new
+  `"hand_descriptions": {player_id: description}` field alongside
+  `revealed_hands` on both `last_hand` and each `/tables/{id}/hands`
+  entry — empty for a hand that ended by fold, same as
+  `revealed_hands` is. Deliberately did **not** add a separate
+  `is_winner` flag: which revealed hand(s) won is already answerable
+  from `payouts` (a `player_id` with `payouts.get(player_id, 0) > 0`
+  won at least one pot), so 0.5c's "visually mark the winner" can read
+  that directly rather than this duplicating it. Tests:
+  `test_hand_evaluator.py` (one example per `HandCategory`, parametrized,
+  plus the wheel-straight-plays-5-high edge case, plus a dedicated
+  full-house trips-before-pair wording check) and `test_api.py` (the
+  description dict reaches both `last_hand` and the history log with
+  keys matching `revealed_hands`, and is empty for a folded hand).
+- [ ] **0.5c (frontend, needs 0.5a — now unblocked, not started):** in
+  `static/index.html`, when a hand's `last_hand` arrives with a
+  `last_hand.runout` longer than what the client actually observed live
+  (exactly the fast-forwarded case), play the extra steps back on the
   felt with a short pause between each — hole cards for any all-in
-  player(s) first, then each community-card stage — before settling into
-  the existing "hand complete" state. A normally-paced hand has nothing
-  new to animate, so this never fires for it. Verify with the same
+  player(s) first (`step.revealed_hole_cards`), then each community-card
+  stage (`step.community_cards`) — before settling into the existing
+  "hand complete" state. Layer `last_hand.hand_descriptions` onto that
+  same settle-in moment, next to each revealed hand, with the winner(s)
+  visually marked (cross-reference `last_hand.payouts`, per 0.5b's note
+  above — no new field needed for that part). A normally-paced hand has
+  nothing new to animate (the client already saw each state live, one
+  push at a time), so this never fires for it. Verify with the same
   jsdom-scaffold discipline this project already uses for frontend work
   (see `HANDOFF.md`), and this is the one part of this phase that
-  genuinely needs the real-browser click-through, not just tests.
+  genuinely needs the real-browser click-through, not just tests — the
+  backend fields it consumes are shipped, live-tested over a real HTTP
+  round trip, and covered by 22 passing tests, but none of that is a
+  substitute for watching an actual reveal sequence animate on an actual
+  screen.
 
 ### Suggested split
 
 Bigger than one session at this project's own ~5-hour sizing (see this
-document's intro). 0.5a (engine + tests, no UI) is a reasonable first
-session on its own; 0.5b is small enough to ride along with 0.5a or be
-its own short session; 0.5c is its own session once 0.5a exists to
-consume.
+document's intro) — this is why it was split. 0.5a and 0.5b (engine +
+API + tests, no UI) shipped together in one session, per the note above.
+0.5c is its own session, now unblocked: `last_hand.runout` and
+`last_hand.hand_descriptions` are live on both `/tables/{id}/state` and
+`/tables/{id}/hands`, so a fresh session can start directly on the
+frontend animation without needing to touch `orchestrator.py` or
+`api.py` again for this phase.
 
 **Definition of done:** an all-in preflop hand, watched live in a real
 browser, visibly reveals hole cards, then flop, then 3rd hole card, then
 turn, then river, each with a pause, before landing on a showdown that
 names and highlights the winning hand against what everyone else had —
 matching the sequence in this phase's originating feedback exactly, not
-a paraphrase of it.
+a paraphrase of it. **Not yet met** — 0.5a/0.5b give the backend data
+this needs, but nothing animates on the felt yet; see 0.5c above.
 
 ---
 
