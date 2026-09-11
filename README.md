@@ -35,9 +35,10 @@ DEPLOYMENT.md                step-by-step deploy instructions for all three
 ```
 
 Every module above the API layer is dependency-free standard-library
-Python. All 244 tests pass as of this handoff (222 prior + 22 added this
-session for the hand-runout log and showdown hand descriptions -- see
-`HANDOFF.md` for the full rundown, and for what shipped in earlier
+Python. All 244 tests pass (222 + 22 added in the session that shipped
+the hand-runout log and showdown hand descriptions; this session's work
+was frontend-only and added no new Python tests -- see `HANDOFF.md` for
+the full rundown, and for what shipped in earlier
 sessions: live bet/pot visibility, the hand-history log, the demo
 landing page, the analytics/instrumentation layer, the real-time
 blind-clock fix, and so on).
@@ -150,8 +151,10 @@ a time instead of all at once, so a client never needs two different
 code paths for "there's something to replay" vs. "nothing changed, I
 already saw all of this live." Empty for a hand that ends by fold before
 reaching any of those streets. This is the backend half of
-`POLISH_PLAN.md`'s Phase 0.5 -- the frontend piece that actually
-animates it on the felt (0.5c) isn't built yet; see `HANDOFF.md`.
+`POLISH_PLAN.md`'s Phase 0.5; `static/index.html` now animates it on the
+felt (see "Hand reveal sequence" below) -- built and verified this
+session by structural (jsdom) tests, but not yet confirmed in a real
+browser; see `HANDOFF.md`.
 
 `hand_descriptions` is a player-facing description of each revealed hand
 at showdown (`"Two Pair, Jacks and Fours"`, `"Full House, Aces full of
@@ -160,6 +163,24 @@ particular revealed hand won isn't duplicated here as its own flag --
 cross-reference `payouts`, which every caller of this already has right
 alongside it. Both fields are empty for a hand that ends by fold, where
 there's nothing to reveal or describe.
+
+## Hand reveal sequence
+
+`static/index.html` plays back a just-finished hand's `runout` and
+`hand_descriptions` (above) on the felt itself, in two situations that
+can each happen independently: a fast-forwarded hand (typically an early
+all-in) replays whichever board/hole-card steps this particular client's
+connection fast-forwarded past -- hole cards for any all-in player(s),
+then flop, then 3rd hole card, then turn, then river, each with a short
+pause -- and *any* hand that reaches a real showdown, fast-forwarded or
+not, gets a closing beat that shows each revealed hand's description
+next to its cards with the winner visually marked. A hand that ends by
+fold gets neither; the existing last-hand banner already covers that
+case on its own. A "Skip" control is available during the reveal. This
+is `POLISH_PLAN.md`'s Phase 0.5c, verified this session via a structural
+(jsdom) test pass built from real captured API output -- **not yet
+confirmed in an actual browser**; see `HANDOFF.md` for exactly what that
+still needs to check before this counts as done.
 
 ## Analytics / instrumentation
 
