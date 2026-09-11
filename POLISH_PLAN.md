@@ -60,8 +60,22 @@ once, deliberately, is worth more than any single new feature.
       one play deep into its own board before checking that the
       rabbit-hunt banner's wording still reads clearly at that point,
       and open the demo's new "Hands played so far" panel after watching
-      both showcase hands. Fix anything that looks wrong before telling
-      anyone outside the project it's ready.
+      both showcase hands. **As of this session, additionally:** force
+      (shallow stacks make this reliable) a preflop all-in and confirm
+      hole cards, flop, 3rd hole card, turn, and river each reveal with
+      a visible pause before a showdown beat names each hand and
+      highlights the winner against what everyone else had; separately
+      confirm a normally-paced hand that reaches a real showdown *also*
+      gets that showdown beat (description + winner highlight) even
+      though there's no board to animate first; click "Skip" mid-reveal
+      and confirm it lands cleanly on the end state; open the persistent
+      hand-history panel and confirm each revealed hand now shows its
+      description with the winning row visually distinguished; and
+      specifically check seat layout at 4+ and 6+ seats, not just
+      heads-up, since the new per-seat description line was only
+      exercised structurally (jsdom), never visually, and could plausibly
+      crowd a seat box at higher counts. Fix anything that looks wrong
+      before telling anyone outside the project it's ready.
 - [ ] While there: decide the one remaining standing open item from
       `HANDOFF.md` Section 4 that doesn't need code — the
       `TRADEMARKS.md` entity-naming mismatch ("GamingTech, LLC" vs.
@@ -202,45 +216,70 @@ at its own pace after the fact:
   full-house trips-before-pair wording check) and `test_api.py` (the
   description dict reaches both `last_hand` and the history log with
   keys matching `revealed_hands`, and is empty for a folded hand).
-- [ ] **0.5c (frontend, needs 0.5a — now unblocked, not started):** in
-  `static/index.html`, when a hand's `last_hand` arrives with a
-  `last_hand.runout` longer than what the client actually observed live
-  (exactly the fast-forwarded case), play the extra steps back on the
-  felt with a short pause between each — hole cards for any all-in
-  player(s) first (`step.revealed_hole_cards`), then each community-card
-  stage (`step.community_cards`) — before settling into the existing
-  "hand complete" state. Layer `last_hand.hand_descriptions` onto that
-  same settle-in moment, next to each revealed hand, with the winner(s)
-  visually marked (cross-reference `last_hand.payouts`, per 0.5b's note
-  above — no new field needed for that part). A normally-paced hand has
-  nothing new to animate (the client already saw each state live, one
-  push at a time), so this never fires for it. Verify with the same
-  jsdom-scaffold discipline this project already uses for frontend work
-  (see `HANDOFF.md`), and this is the one part of this phase that
-  genuinely needs the real-browser click-through, not just tests — the
-  backend fields it consumes are shipped, live-tested over a real HTTP
-  round trip, and covered by 22 passing tests, but none of that is a
-  substitute for watching an actual reveal sequence animate on an actual
-  screen.
+- [ ] **0.5c (frontend, needs 0.5a) — code shipped and jsdom-verified
+  this session; still needs the real-browser watch-through before this
+  phase counts as done.** In `static/index.html`: when a hand's
+  `last_hand` arrives with `last_hand.runout` steps longer than what the
+  client actually observed live (the fast-forwarded case), the felt now
+  plays the extra steps back with a short pause between each — hole
+  cards for any all-in player(s), then that step's community cards,
+  whichever changed at that particular step (some steps only move one of
+  the two — see `HANDOFF.md`'s STREET_ORDER note for why, and why that
+  makes the exact "hole cards → flop → 3rd hole card → turn → river"
+  cadence fall out of the data without needing per-street special-
+  casing). `last_hand.hand_descriptions` now lands at the settle-in
+  moment next to each revealed hand, winner(s) visually marked
+  (cross-referencing `last_hand.payouts`, per 0.5b's note above — no new
+  field was needed for that part, as planned).
+  One deliberate divergence from this bullet's original wording, worth
+  flagging explicitly: it said a normally-paced hand has "nothing new to
+  animate... so this never fires for it," but the Design section above it
+  also explicitly asked for the showdown beat "on *every* hand that
+  reaches a real showdown, not just fast-forwarded all-ins." Shipped
+  behavior follows the Design section: a normally-paced hand has no
+  *runout* steps to replay (true, and confirmed empirically — see
+  `HANDOFF.md`), but it still gets the showdown beat itself, since
+  opponent hole cards are never visible to this client before real
+  showdown regardless of how the hand was paced. Read literally, the
+  original bullet would have meant 0.5b's `hand_descriptions` field
+  never actually gets displayed for the common (non-all-in) case, which
+  didn't seem like the intent.
+  Verified via a jsdom scaffold built from real `TestClient`-captured
+  API output (not guessed shapes) — 8 scenarios, 41 assertions, covering
+  the fast-forwarded-all-in case, the normally-paced-showdown case, a
+  flop (not preflop) all-in exercising the harder branch of the unseen-
+  steps detection, first-connect/reconnect (must not replay history
+  nobody watched live), repeat-poll dedup, and the existing rabbit-hunt
+  banner still working through the restructured render() dispatcher.
+  Scaffold deleted at the end of the session per this project's standing
+  practice. **What jsdom can't tell you, and what's still open:** actual
+  visual layout (does the new per-seat description line crowd a seat at
+  6+ players?), whether the pacing feels right, whether "Skip" is
+  discoverable — see `HANDOFF.md` for the full list of what still
+  genuinely needs a human on a real browser.
 
 ### Suggested split
 
 Bigger than one session at this project's own ~5-hour sizing (see this
 document's intro) — this is why it was split. 0.5a and 0.5b (engine +
-API + tests, no UI) shipped together in one session, per the note above.
-0.5c is its own session, now unblocked: `last_hand.runout` and
-`last_hand.hand_descriptions` are live on both `/tables/{id}/state` and
-`/tables/{id}/hands`, so a fresh session can start directly on the
-frontend animation without needing to touch `orchestrator.py` or
-`api.py` again for this phase.
+API + tests, no UI) shipped together in one session. 0.5c (the frontend
+animation) was its own session, per the plan — its code is now shipped
+and jsdom-verified, but the real-browser watch-through that closes out
+this whole phase still hasn't happened; see `HANDOFF.md` for exactly
+what to check.
 
 **Definition of done:** an all-in preflop hand, watched live in a real
 browser, visibly reveals hole cards, then flop, then 3rd hole card, then
 turn, then river, each with a pause, before landing on a showdown that
 names and highlights the winning hand against what everyone else had —
 matching the sequence in this phase's originating feedback exactly, not
-a paraphrase of it. **Not yet met** — 0.5a/0.5b give the backend data
-this needs, but nothing animates on the felt yet; see 0.5c above.
+a paraphrase of it. **Not yet met.** 0.5a/0.5b/0.5c are all now code-
+complete and each verified as rigorously as this project's tools allow
+short of an actual browser (0.5a/0.5b over a real HTTP round trip and
+244 passing tests; 0.5c via a jsdom scaffold built from that same real
+output) — but per this document's own ground rule, none of that
+substitutes for someone actually watching it happen. That's the one
+remaining step.
 
 ---
 
