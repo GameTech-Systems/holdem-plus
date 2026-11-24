@@ -1,6 +1,6 @@
 # Hold'em Plus equity simulation: technical replication
 
-Every equity number on the [Strategy Guide](../static/strategy.html) comes from `holdem_plus_equity.c`. This page explains exactly what it computes and how to reproduce it.
+Every equity number on the [Strategy Guide](https://holdem-plus-demo.onrender.com/app/strategy.html) comes from `holdem_plus_equity.c`. This page explains exactly what it computes and how to reproduce it.
 
 ## Reproduce it
 
