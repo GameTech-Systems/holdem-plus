@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Hold’em Plus Strategy Guide</title>
+<style>
+:root{--bg:#f3efe4;--panel:#fffcf4;--line:#d9d0ba;--text:#20231f;--mut:#666b60;--accent:#7d5f08;--fold:#ebe5d4;--foldt:#9b9684;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#101a16;--panel:#16231d;--line:#27382f;--text:#ece7dd;--mut:#93a097;--accent:#d4af37;--fold:#14201a;--foldt:#4f6157}}
+:root[data-theme="dark"]{--bg:#101a16;--panel:#16231d;--line:#27382f;--text:#ece7dd;--mut:#93a097;--accent:#d4af37;--fold:#14201a;--foldt:#4f6157}
+*{box-sizing:border-box}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:980px;margin:0 auto;padding:2rem 1.1rem 3rem}
+h1,h2,h3{font-family:"Iowan Old Style","Palatino Linotype",Georgia,serif;font-weight:500;letter-spacing:.01em}
+h1{font-size:clamp(1.9rem,5vw,2.8rem);margin:0 0 .3rem;line-height:1.1}
+h2{font-size:1.4rem;margin:0 0 .7rem}
+h3{font-size:1.05rem;margin:0 0 .4rem}
+.lede{color:var(--mut);max-width:62ch;margin:0 0 1.6rem}
+section{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:1.2rem 1.3rem;margin-bottom:1.1rem}
+.steps{display:flex;flex-wrap:wrap;gap:.5rem;margin:.2rem 0 1rem}
+.step{flex:1 1 130px;border-left:3px solid var(--accent);padding:.15rem .6rem;font-size:.85rem}
+.step b{display:block;font-size:.9rem}
+.step.plus{background:color-mix(in srgb,var(--accent) 14%,transparent)}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:.88rem}
+th,td{text-align:left;padding:.45rem .6rem;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--mut);font-weight:600}
+td:first-child{font-weight:600;white-space:nowrap}
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1.2rem}
+ul{margin:.2rem 0;padding-left:1.1rem}li{margin:.3rem 0}
+.tabs{display:flex;gap:.4rem;margin-bottom:.9rem;flex-wrap:wrap}
+.tabs button{font:inherit;font-size:.88rem;font-weight:600;padding:.45rem .9rem;border-radius:6px;border:1px solid var(--line);background:transparent;color:var(--text);cursor:pointer}
+.tabs button[aria-selected="true"]{background:var(--accent);border-color:var(--accent);color:#14171c}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.grid{display:grid;grid-template-columns:repeat(13,1fr);gap:2px;min-width:480px;max-width:640px;margin:0 auto}
+.c{aspect-ratio:1;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;border-radius:3px;color:#14171c}
+.t1{background:#d4af37}.t2{background:#78b08e}.t3{background:#7fa9cb}.t4{background:#b9abd1}
+.t0{background:var(--fold);color:var(--foldt);font-weight:500}
+.legend{display:flex;flex-wrap:wrap;gap:.4rem 1rem;font-size:.82rem;margin:.9rem 0 .2rem;justify-content:center}
+.legend i{display:inline-block;width:.8rem;height:.8rem;border-radius:2px;margin-right:.35rem;vertical-align:-1px}
+.note{color:var(--mut);font-size:.85rem}
+footer{color:var(--mut);font-size:.8rem;margin-top:1.4rem;max-width:70ch}
+.ctl{display:flex;gap:.6rem;flex-wrap:wrap;margin-bottom:.8rem}
+select{font:inherit;font-size:.88rem;padding:.4rem .6rem;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--text)}
+select:disabled{opacity:.45}
+.c{flex-direction:column;line-height:1.1}
+.c b{font-weight:500;font-size:8.5px}
+.c.heat{color:var(--text)}.c.heat span{opacity:.7}
+.c.na{background:var(--fold);color:var(--foldt)}
+.bar{display:inline-block;width:7rem;height:.6rem;border-radius:3px;vertical-align:-1px;margin:0 .4rem;background:linear-gradient(90deg,rgba(205,92,70,.85),var(--fold),rgba(72,168,104,.85))}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>Hold’em Plus Strategy Guide</h1>
+<p class="lede">Texas Hold’em with one extra hole card, dealt after the flop. Everything else still applies, but best-5-of-8 changes which hands are worth playing and how strong a “good” hand really is.</p>
+
+<section>
+<h2>The rules in one minute</h2>
+<div class="steps">
+<div class="step"><b>Preflop</b>2 hole cards, blinds, first betting round.</div>
+<div class="step plus"><b>Flop + the plus card</b>3 board cards, then every player still in gets a 3rd hole card face down.</div>
+<div class="step"><b>Flop betting</b>The first street where everyone holds 3 cards.</div>
+<div class="step"><b>Turn, river</b>One board card each, with betting after both.</div>
+<div class="step"><b>Showdown</b>Best 5 cards from your 3 hole cards plus the 5 board cards.</div>
+</div>
+<div class="scroll"><table>
+<tr><th></th><th>Texas Hold’em</th><th>Hold’em Plus</th></tr>
+<tr><td>Hole cards</td><td>2</td><td>2, then a 3rd after the flop (folded players never get it)</td></tr>
+<tr><td>Showdown hand</td><td>Best 5 of 7 (21 combinations)</td><td>Best 5 of 8 (56 combinations)</td></tr>
+<tr><td>Betting rounds</td><td>4</td><td>4, and the plus card lands before flop betting</td></tr>
+<tr><td>Winning hands</td><td>One or two pair often wins</td><td>Flushes, straights and full houses win more often</td></tr>
+<tr><td>Rabbit Runner</td><td>None</td><td>Fold on the turn or river, then pay a small fee to see the river you missed (one small blind in the demo)</td></tr>
+</table></div>
+<p class="note">Unchanged: hand rankings, the A-2-3-4-5 wheel, button and blinds (heads-up, the button posts the small blind), uncalled bets returned, side pots for short all-ins.</p>
+</section>
+
+<section>
+<h2>Starting-hand cheat sheet</h2>
+<div class="tabs" role="tablist">
+<button role="tab" data-tab="2" aria-selected="true">Preflop: 2 cards</button>
+<button role="tab" data-tab="3" aria-selected="false">After the plus card: 3 cards</button>
+</div>
+
+<div id="p2">
+<div class="ctl">
+<select id="view" aria-label="Chart view"><option value="t">Strategy tiers</option><option value="h">Hold’em equity</option><option value="p">Hold’em Plus equity</option><option value="d">Plus minus Hold’em</option><option value="pr">Plus: third card pairs you</option><option value="su">Plus: third card suits you</option><option value="mi">Plus: third card misses</option></select>
+<select id="opp" aria-label="Opponents"><option value="1">Heads-up</option><option value="5">6-handed</option></select>
+</div>
+<div class="scroll"><div class="grid" id="grid" role="img" aria-label="13 by 13 starting hand chart. Pairs on the diagonal, suited hands above it, offsuit hands below."></div></div>
+<div class="legend" id="legend"></div>
+<p class="note" id="viewnote" style="text-align:center"></p>
+<p class="note" style="text-align:center">Pairs on the diagonal · suited above (s) · offsuit below (o). Hover a cell for equity and all-in EV.</p>
+<div class="scroll"><table>
+<tr><th>Tier</th><th>Early seats</th><th>Middle</th><th>Late (cutoff, button)</th><th>Blinds</th></tr>
+<tr><td>Premium</td><td>Raise</td><td>Raise</td><td>Raise or re-raise</td><td>Re-raise</td></tr>
+<tr><td>Strong</td><td>Raise</td><td>Raise</td><td>Raise, call a re-raise</td><td>Call or re-raise</td></tr>
+<tr><td>Playable</td><td>Fold</td><td>Raise</td><td>Raise</td><td>Defend against small raises</td></tr>
+<tr><td>Speculative</td><td>Fold</td><td>Fold</td><td>Raise if folded to you; call cheap</td><td>Defend cheaply</td></tr>
+</table></div>
+<p class="note">What the extra card does: it pulls every hand toward average. Heads-up, AA falls from 85% to 75% while 72o rises from 35% to 40%. Against a full table, premium pairs lose the most (AA 49% to 35% against five hands). Suited and connected hands gain the most relative to Hold’em (87s: 48% to 53% heads-up), and big offsuit hands lose (A9o: 61% to 54%).</p>
+<h3 style="margin-top:1.1rem">Opening ranges by seat (6-handed, folded to you)</h3>
+<div class="scroll"><table>
+<tr><th>Seat</th><th>Open with</th></tr>
+<tr><td>Early</td><td>88+, ATs+, KTs+, QTs+, JTs, AKo</td></tr>
+<tr><td>Middle</td><td>Early, plus 77–55, AQo, KQo, A9s–A5s, K9s, Q9s, J9s, T9s, 98s</td></tr>
+<tr><td>Cutoff</td><td>Middle, plus 44–22, A4s–A2s, T8s, 87s, 76s, AJo, KJo</td></tr>
+<tr><td>Button</td><td>Cutoff, plus ATo, QJo, JTo, K8s, Q8s, J8s, 97s, 86s, 75s, 65s, 54s</td></tr>
+<tr><td>Small blind</td><td>Raise Playable hands and better. Fold the rest rather than limping.</td></tr>
+</table></div>
+</div>
+
+<div id="p3" hidden>
+<p class="note">Your plus card arrives before flop betting, so you decide with all 3 cards and the flop in view. Here is what it did to your hand:</p>
+<div class="scroll"><table>
+<tr><th>Your 2 cards</th><th>The plus card…</th><th>Odds</th><th>Play</th></tr>
+<tr><td>Pocket pair</td><td>…is the third of a kind: a hidden set</td><td>≈ 4% (2 in 47)</td><td>Bet and raise for value. Nobody can put you on it.</td></tr>
+<tr><td>Two unpaired cards</td><td>…pairs one of them</td><td>≈ 13% (6 in 47)</td><td>Pairing your higher card with a good kicker is the best ordinary result. Continue.</td></tr>
+<tr><td>Suited</td><td>…matches the suit: three to a flush</td><td>≈ 23% (11 in 47)</td><td>With the ace of that suit, a premium draw: play it hard. Low flushes are second-best traps.</td></tr>
+<tr><td>Connected</td><td>…extends the run: three to a straight</td><td>Varies with the gap</td><td>Semi-bluff when the flop adds a fourth connector. Avoid non-nut straights on paired or two-flush boards.</td></tr>
+<tr><td>Anything</td><td>…misses completely</td><td>—</td><td>You hold your 2-card hand plus a blocker. Check or fold to pressure with no pair or draw.</td></tr>
+</table></div>
+<h3 style="margin-top:1.1rem">Equity of common three-card hands</h3>
+<p class="note">All-in before the flop, if you held exactly these three cards against random opponents who also hold three. Read it as raw strength of the shape. Fair share is 50% heads-up and 16.7% against five hands.</p>
+<div class="scroll"><table id="shapes"><tr><th>Three-card shape</th><th>Example</th><th>Heads-up</th><th>6-handed</th></tr></table></div>
+<h3 style="margin-top:1.1rem">Three-card hand tiers (after you see the flop)</h3>
+<div class="scroll"><table>
+<tr><th>Tier</th><th>Examples</th><th>Plan</th></tr>
+<tr><td>Monster</td><td>Set or trips in your hand, nut flush, nut straight, full house</td><td>Build the pot. Bet big on wet boards; you rarely need to slow-play.</td></tr>
+<tr><td>Strong</td><td>Overpair with a backup draw, non-nut flush on a dry board, top pair with the best kicker</td><td>Bet for value and protection, and be ready to fold to a big river raise.</td></tr>
+<tr><td>Draw</td><td>Nut flush draw, wrap, pair plus a draw</td><td>Bet or raise as a semi-bluff. You usually have more outs than you did in Hold’em.</td></tr>
+<tr><td>Marginal</td><td>Middle or weak pair, top pair with a poor kicker</td><td>Pot control. Check, call small, fold to repeated bets.</td></tr>
+<tr><td>Air</td><td>No pair, no draw</td><td>Give up unless you hold a clear bluffing story.</td></tr>
+</table></div>
+</div>
+</section>
+
+<section>
+<h2>Core principles</h2>
+<ul>
+<li><b>The flop is the real decision street.</b> It is the first betting round where every player has all 3 cards.</li>
+<li><b>Think nuts, not “good hand.”</b> With 8 cards to choose from, second-best flushes and straights lose more often than they do in Hold’em.</li>
+<li><b>One pair is weaker.</b> Top pair with a weak kicker is a bluff-catcher; fold it to large river bets more than you would in Hold’em.</li>
+<li><b>Charge the draws.</b> More outs and combo draws mean bigger bets on wet boards, and more semi-bluffs when you hold the draw.</li>
+<li><b>Watch the board.</b> Paired boards make full houses and quads more likely, and a flush or straight can be beaten by a hand you did not consider.</li>
+<li><b>Pot odds are unchanged.</b> The rule of 2 and 4 still estimates your equity; just count the extra outs your 3rd card gives.</li>
+<li><b>Rabbit Runner is information, not value.</b> It cannot change the hand you folded. Treat it as a paid extra for curiosity or learning. In tournaments the fee is cash or e-notes on DAS, never tournament chips.</li>
+</ul>
+</section>
+
+<section>
+<h2>Ring game vs tournament</h2>
+<div class="cols">
+<div>
+<h3>Ring game (cash)</h3>
+<ul>
+<li>Every chip is worth its face value, so take any +EV risk, including all-ins.</li>
+<li>Deep stacks reward implied odds: suited aces, suited connectors and small pairs gain value. Set-mine when stacks are about 15–20 times the raise.</li>
+<li>Position is your main edge. Open wider on the button and cutoff, much tighter from early seats.</li>
+<li>Thin value bets with one pair lose value, since opponents’ calling ranges beat you more often.</li>
+<li>Pick tables with loose, passive, multiway pots. Your strong hands get paid.</li>
+<li>Rebuy freely when short. There is no survival value to protect.</li>
+</ul>
+</div>
+<div>
+<h3>Tournament</h3>
+<ul>
+<li>Chips lost cost more than chips won gain (ICM). Avoid marginal all-ins near the bubble and pay jumps; chip leaders should apply pressure.</li>
+<li>Depth zones: above 30 big blinds, play normally. 15–30: drop speculative hands, raise or fold. 10–15: shove or fold. Under 10: push or fold only.</li>
+<li>Blinds rise on a clock (the demo starts at 1/2 with 40 chips and 15-minute levels), so stacks shrink fast. Steal blinds early.</li>
+<li>Heads-up, the button is the small blind and acts first preflop. Play wide: any ace, any pair, suited and broadway cards.</li>
+<li>Premium edges shrink: AA is a 75% favorite heads-up here against 85% in Hold’em, so skip coin-flip all-ins you do not need.</li>
+</ul>
+</div>
+</div>
+</section>
+
+<footer>Every number here is reproducible: <a href="https://github.com/GameTech-Systems/holdem-plus/tree/main/sim" style="color:var(--accent)">simulation code, workflow and replication notes on GitHub</a>. Equities are Monte Carlo results (300,000 deals heads-up, 150,000 against five hands; about ±0.1 points) against random opponents who never fold, with ties split. Hold’em and Plus use the same deals, so differences are exact comparisons. Equity against random hands is raw strength, not EV against real opponents who fold, so use it to rank hands, not to size bets. All-in EV per chip staked is players × equity − 1. Tiers and ranges are rule-of-thumb guidance informed by these numbers, not solver output. Odds on the three-card tab are exact draws from the 47 unseen cards after the flop.</footer>
+</div>
+<script>
+const D={hu:{h:[85.2,67.1,66.2,65.3,64.6,62.8,62.1,61.0,59.8,59.9,59.2,58.3,57.4,65.2,82.4,63.4,62.7,62.0,60.0,58.3,57.6,56.4,55.8,54.9,54.1,53.1,64.4,61.4,79.9,60.2,59.4,57.7,55.9,54.3,53.7,52.6,51.8,50.9,50.2,63.3,60.6,58.0,77.4,57.4,55.6,53.9,52.4,50.6,49.8,49.0,48.2,47.4,62.8,59.8,57.3,55.3,75.0,54.2,52.3,50.7,49.0,47.1,46.5,45.6,44.9,60.8,58.1,55.4,53.1,51.7,72.0,50.8,49.2,47.4,45.7,43.8,43.3,42.5,59.7,56.1,53.5,51.5,49.8,48.1,69.1,47.9,46.3,44.7,42.6,40.8,40.2,58.8,55.1,51.7,49.7,47.8,46.2,45.1,66.2,45.1,43.5,41.8,40.0,38.2,57.6,54.2,51.0,47.7,45.9,44.4,43.4,42.1,63.1,43.0,41.4,39.6,37.7,57.8,53.2,50.1,47.1,44.3,42.9,41.5,40.5,39.9,60.3,41.3,39.5,37.9,56.7,52.3,49.1,46.2,43.6,40.7,39.5,38.5,37.9,38.2,56.9,38.6,36.8,55.8,51.4,48.2,45.4,42.5,40.1,37.5,36.4,36.1,36.2,35.1,53.6,36.1,54.8,50.4,47.4,44.3,41.8,39.0,36.8,34.6,34.1,34.3,33.2,32.3,50.3],p:[75.1,60.3,59.8,59.4,59.0,57.1,57.1,56.4,55.2,56.1,55.1,54.2,53.3,57.6,72.2,58.7,58.4,58.0,56.0,54.8,54.4,53.7,53.5,52.4,51.4,50.4,57.0,56.0,70.2,57.9,57.5,55.7,54.0,52.7,52.8,52.1,51.2,50.4,49.3,56.4,55.6,55.0,68.3,57.4,55.4,53.9,52.8,51.1,51.2,50.1,49.2,48.3,56.2,54.9,54.6,54.6,66.5,55.6,54.1,52.7,51.4,50.0,49.5,48.4,47.6,54.1,53.0,52.5,52.2,52.7,63.9,53.9,52.4,50.9,49.7,47.9,47.3,46.4,53.6,51.5,50.8,50.7,51.1,50.7,61.5,52.6,51.1,49.7,47.9,45.9,45.4,53.0,51.1,49.4,49.3,49.5,49.0,49.4,59.3,51.0,49.7,48.0,46.2,44.3,52.2,50.6,49.3,47.7,47.8,47.6,47.9,47.8,57.1,50.1,48.3,46.4,44.4,53.0,50.0,48.8,47.8,46.5,46.4,46.4,46.5,46.9,55.3,49.0,47.2,45.4,51.7,49.0,47.6,46.6,45.9,44.2,44.2,44.5,44.8,45.5,52.5,46.2,44.1,50.8,48.1,46.7,45.6,44.7,43.7,42.2,42.2,42.8,43.5,42.4,50.0,43.2,49.4,46.8,45.6,44.5,43.9,42.4,41.6,40.3,40.5,41.6,40.4,39.1,47.4],pr:[72.0,34.8,34.6,32.6,32.7,29.8,29.5,28.9,28.7,29.4,28.5,28.8,27.9,33.2,69.8,32.4,30.9,30.8,28.7,27.2,26.9,26.0,26.2,25.8,24.9,25.0,32.4,30.3,68.4,30.3,29.9,27.6,26.4,24.5,24.1,24.0,23.8,23.9,23.0,31.5,29.1,28.9,66.7,29.5,26.3,25.0,24.7,22.9,23.1,21.6,21.6,21.5,31.0,28.8,27.4,27.8,65.7,26.9,25.3,23.5,22.1,21.3,21.2,20.9,20.2,28.2,26.0,25.5,24.9,24.6,63.1,24.6,22.6,22.1,20.4,19.7,19.7,19.4,27.8,25.1,23.6,23.2,23.5,22.9,59.9,22.9,22.3,20.7,20.3,18.3,18.9,26.7,24.3,22.4,22.2,22.1,21.9,21.5,59.1,21.8,20.9,20.0,19.0,17.8,26.1,24.3,22.3,20.3,20.5,20.4,20.0,20.1,57.2,21.1,19.8,18.9,18.3,26.7,24.3,22.2,20.3,19.6,18.7,18.8,19.3,19.3,55.3,20.1,19.7,18.6,26.7,23.4,21.5,20.5,19.2,18.0,17.4,18.1,18.2,19.0,51.6,19.3,17.4,26.1,23.3,21.5,19.7,19.0,17.7,16.7,16.8,17.3,18.0,17.2,49.5,17.2,26.0,22.6,21.0,19.9,19.1,17.3,16.7,16.1,16.2,16.2,16.3,15.5,46.4],su:[null,32.3,31.4,30.2,30.8,29.6,29.1,29.4,28.8,29.5,29.3,28.7,28.4,null,null,30.9,30.9,30.3,29.8,28.2,28.1,28.0,27.9,27.3,27.6,27.1,null,null,null,30.8,30.4,28.8,28.1,27.7,27.6,27.4,27.1,26.6,26.3,null,null,null,null,31.2,28.7,28.3,27.5,26.8,26.7,26.8,26.7,26.0,null,null,null,null,null,29.7,28.6,27.4,26.7,26.2,25.9,26.0,25.6,null,null,null,null,null,null,28.4,27.7,27.3,26.5,25.6,25.6,24.6,null,null,null,null,null,null,null,28.2,27.8,27.1,26.0,25.2,24.8,null,null,null,null,null,null,null,null,27.8,27.4,26.5,25.5,24.5,null,null,null,null,null,null,null,null,null,27.7,26.4,25.7,25.3,null,null,null,null,null,null,null,null,null,null,27.2,26.7,25.1,null,null,null,null,null,null,null,null,null,null,null,26.3,25.5,null,null,null,null,null,null,null,null,null,null,null,null,24.8,null,null,null,null,null,null,null,null,null,null,null,null,null],mi:[33.0,20.3,20.2,19.6,19.5,17.5,17.8,17.4,16.9,17.8,17.2,16.8,16.3,19.0,29.3,19.5,19.5,19.5,17.5,16.4,16.2,16.3,15.9,15.4,15.0,14.9,18.2,18.5,27.3,19.7,19.8,17.5,16.2,15.4,15.6,15.3,15.0,14.4,14.0,17.9,17.8,18.6,25.3,19.9,18.0,16.7,15.6,14.9,14.5,14.6,14.0,13.8,17.7,17.7,18.3,18.9,24.3,18.6,17.4,16.3,15.2,14.4,14.2,13.7,13.3,15.7,15.4,16.0,16.7,17.4,22.7,17.2,16.3,15.2,14.4,13.0,13.0,12.5,15.4,14.7,14.6,15.2,16.2,16.0,21.4,16.4,15.6,14.7,13.4,12.4,12.2,15.2,14.3,13.7,14.2,14.9,15.3,15.6,20.6,16.0,15.3,13.8,12.7,11.6,14.7,14.2,13.7,13.4,13.7,13.9,14.5,15.0,19.8,15.7,14.4,13.2,12.1,15.6,14.0,13.6,13.3,12.8,13.0,13.5,14.0,14.4,19.3,15.3,14.0,12.9,15.1,13.5,13.2,12.9,12.6,11.8,12.3,12.7,13.4,14.3,18.3,13.4,12.4,14.6,13.2,12.8,12.4,12.2,11.5,11.1,11.6,12.1,13.0,12.4,17.4,11.7,14.1,12.8,12.5,12.1,11.8,11.1,10.8,10.4,10.9,11.9,11.4,10.7,17.0]},six:{h:[49.2,31.1,29.4,27.6,26.7,24.0,23.4,22.4,21.5,22.1,21.6,21.2,20.6,27.6,42.9,28.3,26.9,25.7,23.5,21.5,20.5,20.1,19.2,18.8,18.6,18.2,25.8,25.1,37.8,26.4,25.4,22.7,20.6,19.2,18.7,18.0,17.6,17.3,16.7,24.1,23.3,23.0,33.4,24.8,22.3,20.4,18.8,17.5,16.7,16.5,16.0,15.7,23.1,22.1,21.6,21.6,30.1,22.5,20.6,18.7,17.3,15.9,15.6,15.3,15.0,20.2,19.3,18.9,18.9,18.9,26.8,20.2,18.8,17.3,15.9,14.5,14.3,13.9,19.3,17.4,16.8,16.6,16.9,16.8,24.0,18.9,17.8,16.3,14.8,13.6,13.4,18.2,16.5,15.0,14.9,15.1,15.3,15.3,21.9,17.9,16.9,15.3,14.1,12.8,17.3,15.9,14.4,13.2,13.5,13.4,13.9,14.1,20.0,17.1,15.7,14.4,13.3,18.1,15.3,13.9,12.9,11.9,12.0,12.3,12.7,13.2,18.5,16.5,15.3,13.9,17.5,14.8,13.5,12.3,11.4,10.6,10.7,11.4,11.9,12.7,17.0,14.8,13.5,17.0,14.3,12.9,12.0,10.9,10.2,9.5,9.8,10.6,11.3,10.7,16.2,13.0,16.3,13.8,12.6,11.4,10.7,9.7,9.1,8.6,9.3,10.0,9.6,8.9,15.4],p:[34.6,24.7,24.4,23.5,23.6,21.7,21.7,21.4,21.0,21.7,21.2,20.8,20.3,20.7,30.9,23.6,23.4,23.2,21.5,20.3,20.1,20.0,19.8,19.3,19.0,18.7,19.9,19.9,28.9,23.4,23.4,21.2,20.0,19.2,19.3,19.0,18.7,18.3,17.8,19.5,19.2,19.8,27.0,23.5,21.4,20.3,19.3,18.5,18.2,18.1,17.7,17.4,19.3,19.0,19.4,19.9,26.0,22.0,20.8,19.6,18.6,17.8,17.6,17.2,16.8,17.2,16.7,17.1,17.7,18.2,24.3,20.6,19.6,18.7,17.8,16.5,16.6,16.0,16.9,15.9,15.6,16.1,17.0,16.8,22.9,19.8,19.1,18.1,17.0,15.9,15.8,16.6,15.5,14.7,15.2,15.8,16.1,16.3,22.2,19.3,18.6,17.3,16.3,15.2,16.1,15.4,14.7,14.3,14.5,14.7,15.1,15.6,21.3,19.0,17.7,16.7,15.7,16.9,15.2,14.6,14.1,13.6,13.7,14.1,14.6,14.9,20.8,18.5,17.5,16.3,16.5,14.7,14.2,13.8,13.4,12.5,12.9,13.3,13.9,14.8,19.6,16.9,15.9,16.0,14.4,13.8,13.3,13.1,12.3,11.8,12.2,12.7,13.6,13.0,18.7,15.2,15.5,13.9,13.5,13.0,12.7,11.8,11.5,11.1,11.5,12.4,12.0,11.3,18.2]},sh:[["Trips","7s7h7d",87.8,58.5],["Aces + king","AsAhKd",73.7,32.6],["Nines + ace kicker","9s9hAd",64.3,23.1],["Nines + low kicker","9s9h4d",59.3,18.3],["Fives + junk","5s5h9d",52.9,16.8],["Ace-high, three suited","As9s4s",59.3,27.9],["King-queen-jack, three suited","KsQsJs",67.7,35.5],["9-8-7, three suited","9s8s7s",62.3,31.2],["J-10-9, rainbow","JsTh9d",57.4,22.7],["Ace-king suited + low off","AsKs4d",54.7,19.0],["Ace-king-queen, rainbow","AsKhQd",59.2,21.9],["Ace + two low, rainbow","As8h3d",46.2,11.1],["Jack-10 suited + low off","JsTs4d",48.5,15.7],["Rainbow junk","9s5h2d",36.5,8.9]]};
+const R="AKQJT98765432";
+const T={1:"AA KK QQ JJ TT AKs AKo",
+2:"99 88 AQs AJs ATs KQs KJs KTs QJs QTs JTs",
+3:"77 66 55 AQo KQo T9s 98s J9s Q9s K9s T8s A9s A8s A7s A6s A5s A4s A3s A2s",
+4:"44 33 22 AJo ATo KJo QJo JTo K8s Q8s J8s T7s 97s 87s 86s 76s 75s 65s 54s"};
+const tier={};for(const k in T)T[k].split(" ").forEach(h=>tier[h]=k);
+const names=[];
+for(let i=0;i<13;i++)for(let j=0;j<13;j++)names.push(i==j?R[i]+R[j]:i<j?R[i]+R[j]+"s":R[j]+R[i]+"o");
+const NOTE={t:"Strategy tiers, tuned with the equity numbers on the other views.",
+h:"Hold’em equity: your share of the pot if everyone is all-in before the flop.",
+p:"Hold’em Plus equity: the same all-in, with a third hole card and best 5 of 8.",
+d:"Plus minus Hold’em in percentage points. Green hands gain from the third card; red hands lose.",
+pr:"Plus, heads-up, when your third card pairs a hole card (trips for a pair).",
+su:"Plus, heads-up, when your third card matches your suited hole cards (suited hands only).",
+mi:"Plus, heads-up, when your third card neither pairs you nor adds a suit."};
+const $=id=>document.getElementById(id);
+function series(v,six){const a=six?D.six:D.hu;if(v=="d")return a.p.map((x,i)=>+(x-a.h[i]).toFixed(1));return a[v];}
+function draw(){
+  const v=$("view").value,flex="hdp".includes(v),six=flex&&$("opp").value=="5",n=six?6:2,fair=100/n;
+  $("opp").disabled=!flex;
+  const a=v=="t"?null:series(v,six),base=v=="d"?0:fair,src=six?D.six:D.hu;
+  let mx=0,mn=0;
+  if(a)a.forEach(x=>{if(x!=null){mx=Math.max(mx,x-base);mn=Math.min(mn,x-base);}});
+  const g=$("grid");g.innerHTML="";
+  names.forEach((h,k)=>{
+    const d=document.createElement("div"),s=document.createElement("span");
+    s.textContent=h;d.appendChild(s);
+    if(!a){d.className="c t"+(tier[h]||0);}
+    else{
+      d.className="c heat";const x=a[k],b=document.createElement("b");
+      if(x==null){d.classList.add("na");b.textContent="–";}
+      else{const dv=x-base,al=.85*Math.abs(dv)/((dv>=0?mx:-mn)||1);
+        d.style.background="rgba("+(dv>=0?"72,168,104":"205,92,70")+","+al.toFixed(2)+")";
+        b.textContent=(v=="d"&&x>0?"+":"")+x.toFixed(1);}
+      d.appendChild(b);
+    }
+    const ev=e=>(n*e/100-1>=0?"+":"")+(n*e/100-1).toFixed(2);
+    d.title=h+": Hold’em "+src.h[k]+"% (EV "+ev(src.h[k])+") · Plus "+src.p[k]+"% (EV "+ev(src.p[k])+"), all-in "+(six?"6-handed":"heads-up");
+    g.appendChild(d);
+  });
+  $("viewnote").textContent=NOTE[v]+(flex?" Fair share is "+fair.toFixed(1)+"%.":"");
+  $("legend").innerHTML=!a?'<span><i class="t1"></i>Premium</span><span><i class="t2"></i>Strong</span><span><i class="t3"></i>Playable</span><span><i class="t4"></i>Speculative</span><span><i class="t0"></i>Fold</span>'
+    :'<span>'+(v=="d"?"Loses with the third card":"Below fair share")+'<span class="bar"></span>'+(v=="d"?"Gains":"Above fair share")+'</span>';
+}
+$("view").onchange=draw;$("opp").onchange=draw;draw();
+const sym={s:"♠",h:"♥",d:"♦",c:"♣"},st=$("shapes");
+D.sh.slice().sort((x,y)=>y[2]-x[2]).forEach(r=>{
+  const tr=st.insertRow();tr.insertCell().textContent=r[0];
+  tr.insertCell().textContent=r[1].match(/../g).map(c=>c[0].replace("T","10")+sym[c[1]]).join(" ");
+  tr.insertCell().textContent=r[2].toFixed(1)+"%";tr.insertCell().textContent=r[3].toFixed(1)+"%";
+});
+const tabs=document.querySelectorAll("[data-tab]");
+tabs.forEach(b=>b.onclick=()=>{
+  tabs.forEach(x=>x.setAttribute("aria-selected",x===b));
+  $("p2").hidden=b.dataset.tab!="2";$("p3").hidden=b.dataset.tab!="3";
+});
+</script>
+</body>
+</html>
