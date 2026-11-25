@@ -10,13 +10,13 @@ on:
         description: Deals per hand, 6-handed
         default: "150000"
       seed:
-        description: RNG seed
+        description: RNG seed (nonzero)
         default: "88172645463325252"
   pull_request:
-    paths: ["sim/**", ".github/workflows/equity-sim.yml"]
+    paths: ["sim/**", "static/strategy.html", ".github/workflows/equity-sim.yml"]
   push:
     branches: [main]
-    paths: ["sim/**", ".github/workflows/equity-sim.yml"]
+    paths: ["sim/**", "static/strategy.html", ".github/workflows/equity-sim.yml"]
 
 jobs:
   simulate:
@@ -27,29 +27,55 @@ jobs:
         with:
           python-version: "3.12"
       - name: Build simulator
-        run: gcc -O2 -Wall -o equity sim/holdem_plus_equity.c
-      - name: Cross-check evaluator against hand_evaluator.py
+        run: gcc -O2 -Wall -Wextra -o equity sim/holdem_plus_equity.c -lm
+
+      # --- Layer 1: hand evaluation -------------------------------------------------------------
+      - name: Evaluator self-test (exact 5- and 7-card category counts, 8-card consistency)
+        run: ./equity --selftest
+      - name: Evaluator ordering, exhaustive over all 7,462 distinct 5-card hands vs hand_evaluator.py
+        run: python sim/exhaustive_check.py ./equity
+      - name: Evaluator edge cases (quads kickers, two sets, three pairs, wheels, board plays)
+        run: python sim/edge_cases.py ./equity
+      - name: Evaluator random cross-check against hand_evaluator.py
         run: python sim/cross_check.py ./equity 20000
+
+      # --- Layer 2: the simulator program itself --------------------------------------------------
+      - name: Invalid arguments are rejected (a zero seed or zero trials used to produce garbage silently)
+        run: |
+          for args in "--seed 0" "--seed abc" "--seed -1" "--hu-trials 0" "--six-trials x" "--bogus"; do
+            if ./equity $args >/dev/null 2>&1; then echo "accepted invalid arguments: $args"; exit 1; fi
+          done
+
+      # --- Layer 3: the numbers on the page ---------------------------------------------------------
+      - name: Exact third-card odds (full enumeration)
+        run: python sim/third_card_odds.py
       - name: Run simulation
         run: |
           ./equity --hu-trials "${{ inputs.hu_trials || '300000' }}" \
                    --six-trials "${{ inputs.six_trials || '150000' }}" \
                    --seed "${{ inputs.seed || '88172645463325252' }}" > results.json
+      - name: Strategy page data matches this run (skipped for non-default seed or trials)
+        run: python sim/check_published.py results.json static/strategy.html
       - name: Sanity-check against known Texas Hold'em equities and summarize
         run: |
           python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import json
           d = json.load(open("results.json"))
           R = "AKQJT98765432"
-          def at(a, name):
+          def idx(name):
               i, j = R.index(name[0]), R.index(name[1])
-              return a[i*13+j] if name[0] == name[1] or name.endswith("s") else a[j*13+i]
+              return i*13+j if name[0] == name[1] or name.endswith("s") else j*13+i
           known = {"AA": 85.2, "KK": 82.4, "AKs": 67.1, "AKo": 65.2, "72o": 34.6}
-          print("| Hand | Hold'em HU (sim) | Known | Plus HU | Hold'em 6-max | Plus 6-max |\n|---|---|---|---|---|---|")
+          se = d["se"]
+          print(f"Seed {d['meta']['seed']}, {d['meta']['hu_trials']} heads-up and {d['meta']['six_trials']} six-handed deals per hand. Standard errors in points.\n")
+          print("| Hand | Hold'em HU (sim) | SE | Known | Plus HU | Plus minus Hold'em | SE | Hold'em 6-max | Plus 6-max |\n|---|---|---|---|---|---|---|---|---|")
           for n, k in known.items():
-              h = at(d["hu"]["h"], n)
-              assert abs(h - k) < 1.0, f"{n}: simulated {h}, expected about {k}"
-              print(f"| {n} | {h} | {k} | {at(d['hu']['p'], n)} | {at(d['six']['h'], n)} | {at(d['six']['p'], n)} |")
+              i = idx(n)
+              h = d["hu"]["h"][i]
+              assert abs(h - k) < 0.5, f"{n}: simulated {h}, expected about {k}"
+              diff = d["hu"]["p"][i] - h
+              print(f"| {n} | {h} | {se['hu']['h'][i]} | {k} | {d['hu']['p'][i]} | {diff:+.1f} | {se['hu']['d'][i]} | {d['six']['h'][i]} | {d['six']['p'][i]} |")
+          print(f"\nLargest standard error: {max(se['hu']['h'] + se['hu']['p'] + se['hu']['d']):.3f} heads-up, {max(se['six']['h'] + se['six']['p'] + se['six']['d']):.3f} six-handed.")
           PY
       - uses: actions/upload-artifact@v4
         with:
