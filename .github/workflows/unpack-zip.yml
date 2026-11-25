@@ -1,0 +1,202 @@
+name: Unpack uploaded zip
+
+# Upload a .zip to the repository root (GitHub: Add file > Upload files). This workflow unpacks it into the
+# right folders, runs the validation suite on the result, and only then commits to main (which Render
+# auto-deploys) and deletes the zip. If anything is wrong nothing is committed and the zip stays put.
+#
+# Only these destinations are accepted, so a zip cannot overwrite the engine or tests by accident:
+#   sim/*.{c,py,md,sh}   static/strategy.html   HANDOFF.md / POLISH_PLAN.md / README.md   .github/workflows/*.yml
+#
+# Workflow files: GitHub does not let the built-in token change .github/workflows/. They are skipped with a
+# warning (upload those by hand) unless you add a personal access token with the `workflow` scope as the
+# repository secret WORKFLOW_PAT. With the secret they are installed too, and pushes trigger other workflows.
+
+on:
+  push:
+    branches: [main]
+    paths: ["*.zip"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: unpack-zip
+  cancel-in-progress: false
+
+jobs:
+  unpack:
+    runs-on: ubuntu-latest
+    env:
+      HAS_PAT: ${{ secrets.WORKFLOW_PAT != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.WORKFLOW_PAT || github.token }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate and unpack
+        id: unpack
+        run: |
+          python3 - <<'PY'
+          """Validate and unpack every *.zip at the repository root into its proper place.
+
+          Nothing is written unless EVERY zip passes validation. Files are never extracted blindly: each entry is checked
+          against an allowlist of destinations, so a zip cannot overwrite engine code, tests, or anything else by accident.
+          """
+          import glob, os, re, sys, zipfile
+
+          HAS_PAT = os.environ.get("HAS_PAT") == "true"          # a PAT is needed to push .github/workflows/ changes
+          OUT = os.environ.get("GITHUB_OUTPUT")
+          SUMMARY = os.environ.get("GITHUB_STEP_SUMMARY")
+          MANIFEST = os.environ.get("UNPACK_MANIFEST", "/tmp/unpack_manifest.txt")      # paths to `git add`
+          ZIPLIST = os.environ.get("UNPACK_ZIPS", "/tmp/unpack_zips.txt")               # zips to `git rm`
+
+          ALLOWED = [                                          # (destination pattern, kind)
+              (re.compile(r"^sim/[A-Za-z0-9_.-]+\.(c|py|md|sh)$"), "file"),
+              (re.compile(r"^static/strategy\.html$"), "file"),
+              (re.compile(r"^(HANDOFF|POLISH_PLAN|README)\.md$"), "file"),
+              (re.compile(r"^\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml$"), "workflow"),
+          ]
+          WRAPPER_EXEMPT = {"sim", "static", ".github"}        # a top folder with these names is real structure, not a wrapper
+          JUNK_NAMES = {".DS_Store", "Thumbs.db", "desktop.ini"}
+          MAX_FILE_BYTES, MAX_FILES = 5_000_000, 60
+
+
+          def emit(key, value):
+              if OUT:
+                  with open(OUT, "a") as f:
+                      f.write(f"{key}={value}\n")
+
+
+          def is_junk(name):
+              base = name.rsplit("/", 1)[-1]
+              return name.startswith("__MACOSX/") or base in JUNK_NAMES or base.startswith("._")
+
+
+          zips = sorted(glob.glob("*.zip"))
+          if not zips:
+              print("No .zip file at the repository root; nothing to do.")
+              emit("found", "false")
+              sys.exit(0)
+
+          errors, writes = [], {}                              # writes: destination -> (data, kind, source zip)
+          for z in zips:
+              try:
+                  zf = zipfile.ZipFile(z)
+              except zipfile.BadZipFile:
+                  errors.append(f"{z}: not a valid zip file")
+                  continue
+              with zf:
+                  entries = []
+                  for info in zf.infolist():
+                      if info.is_dir():
+                          continue
+                      name = info.filename.replace("\\", "/")
+                      if is_junk(name):
+                          continue
+                      if (info.external_attr >> 16) & 0o170000 == 0o120000:
+                          errors.append(f"{z}: {name} is a symlink")
+                          continue
+                      entries.append((name, info))
+                  if len(entries) > MAX_FILES:
+                      errors.append(f"{z}: {len(entries)} files (limit {MAX_FILES})")
+                      continue
+
+                  # A zip of a whole folder wraps everything in one top directory ("outputs/sim/..."): strip it.
+                  tops = {n.split("/")[0] for n, _ in entries}
+                  if entries and all("/" in n for n, _ in entries) and len(tops) == 1 and not (tops & WRAPPER_EXEMPT):
+                      entries = [(n.split("/", 1)[1], i) for n, i in entries]
+
+                  for name, info in entries:
+                      parts = name.split("/")
+                      if name.startswith("/") or re.match(r"^[A-Za-z]:", name) or ".." in parts or "" in parts:
+                          errors.append(f"{z}: unsafe path {name!r}")
+                          continue
+                      kind = next((k for pat, k in ALLOWED if pat.match(name)), None)
+                      if kind is None:
+                          errors.append(f"{z}: {name} is not an allowed destination")
+                          continue
+                      if info.file_size > MAX_FILE_BYTES:
+                          errors.append(f"{z}: {name} is {info.file_size} bytes (limit {MAX_FILE_BYTES})")
+                          continue
+                      if name in writes:
+                          errors.append(f"{z}: {name} also appears in {writes[name][2]}")
+                          continue
+                      data = zf.read(info)
+                      if len(data) > MAX_FILE_BYTES:
+                          errors.append(f"{z}: {name} expands beyond the size limit")
+                          continue
+                      writes[name] = (data, kind, z)
+
+          if errors:
+              print("Refusing to unpack, nothing was written:")
+              for e in errors:
+                  print("  -", e)
+              if SUMMARY:
+                  with open(SUMMARY, "a") as f:
+                      f.write("### Unpack refused, nothing was written\n\n" + "\n".join(f"- {e}" for e in errors) + "\n")
+              sys.exit(1)
+
+          written, skipped, report = [], [], []
+          for dest in sorted(writes):
+              data, kind, z = writes[dest]
+              if kind == "workflow" and not HAS_PAT:
+                  skipped.append(dest)
+                  report.append(f"| `{dest}` | **skipped**: workflow files need the WORKFLOW_PAT secret; upload this one by hand |")
+                  continue
+              old = open(dest, "rb").read() if os.path.exists(dest) else None
+              status = "unchanged" if old == data else ("new" if old is None else "updated")
+              if status != "unchanged":
+                  os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+                  with open(dest, "wb") as f:
+                      f.write(data)
+                  written.append(dest)
+              report.append(f"| `{dest}` | {status} |")
+
+          with open(MANIFEST, "w") as f:
+              f.write("\n".join(written) + ("\n" if written else ""))
+          with open(ZIPLIST, "w") as f:
+              f.write("\n".join(zips) + "\n")
+
+          text = f"Unpacked {', '.join(zips)}\n\n| File | Result |\n|---|---|\n" + "\n".join(report) + "\n"
+          print(text)
+          if SUMMARY:
+              with open(SUMMARY, "a") as f:
+                  f.write("### " + text)
+          for s in skipped:
+              print(f"::warning::{s} was not installed: pushing workflow files needs a WORKFLOW_PAT secret. Upload it manually.")
+          emit("found", "true")
+          emit("changed", "true" if written else "false")
+          emit("needs_checks", "true" if any(w.startswith(("sim/", "static/")) for w in written) else "false")
+          PY
+
+      - name: Run the validation suite on the unpacked files
+        if: steps.unpack.outputs.needs_checks == 'true'
+        run: bash sim/run_checks.sh
+
+      - name: Commit the files and delete the zip
+        if: steps.unpack.outputs.found == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -s /tmp/unpack_manifest.txt ]; then xargs -a /tmp/unpack_manifest.txt git add --; fi
+          xargs -a /tmp/unpack_zips.txt git rm -q --
+          git commit -m "Unpack $(paste -sd' ' /tmp/unpack_zips.txt)" \
+                     -m "$(sed 's/^/- /' /tmp/unpack_manifest.txt)"
+          git pull --rebase origin main
+          git push origin HEAD:main
+
+      # Pushes made with the built-in token do not start other workflows, so ask for the simulation workflow
+      # explicitly. (With WORKFLOW_PAT the push itself triggers it.)
+      - name: Start the Equity simulation workflow
+        if: steps.unpack.outputs.needs_checks == 'true' && env.HAS_PAT != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run equity-sim.yml --ref main
