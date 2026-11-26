@@ -1,0 +1,22 @@
+name: Tests
+
+# Runs the pytest suite on every push to main and every pull request that touches code. The unpack-zip workflow
+# runs the same script before it commits, so a zip upload is checked before it lands; this covers hand uploads
+# and pull requests. Docs-only changes are skipped.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md", "docs/**"]
+  pull_request:
+    paths-ignore: ["**.md", "docs/**"]
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: pytest
+        run: bash sim/run_checks.sh py
