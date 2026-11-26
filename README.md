@@ -1,213 +1,113 @@
-# Hold'em Plus — Demo Backend
+# Hold'em Plus: Demo Backend, Client and Strategy Guide
 
-A fake-money Hold'em Plus engine and API, built to be forked into a GitHub
-demo that online poker rooms and casinos can try and evaluate. See
-`Hold_em_Plus___Technology_Development_Plan.md` for the full product plan
-and `HANDOFF.md` for exactly where this stands and what's next.
+A play-money Hold'em Plus engine, API, demo table and equity simulation, built to be tried and evaluated by
+online poker rooms and casinos. Hold'em Plus is Texas Hold'em with a third hole card dealt after the flop;
+showdown is the best 5 of 8 cards.
 
-https://holdem-plus-demo.onrender.com/app/
+- Live demo: https://holdem-plus-demo.onrender.com/app/
+- Strategy Guide: https://holdem-plus-demo.onrender.com/app/strategy.html
+- New to the repo or picking up where a session left off: read `ORIENTATION.md`, then `HANDOFF.md`
+  (current state) and `POLISH_PLAN.md` (backlog). The product plan is
+  `Hold_em_Plus___Technology_Development_Plan.md`.
 
 ## What's here
 
 ```
 poker_types.py              Card/HandCategory/HandRank primitives
-hand_evaluator.py           best-5-of-8 hand evaluator
-betting_state_machine.py    per-street betting rounds + the full Hold'em
-                             Plus dealing sequence (HandFlow)
+hand_evaluator.py           best-5-of-8 evaluator, plus describe_hand_rank()
+betting_state_machine.py    per-street betting + the full Hold'em Plus dealing sequence
 side_pots.py                uncalled-bet refund + multi-way side pots
-tournament_structure.py     blind schedule/clock + payout structures
-tournament_balancing.py     multi-table seating, elimination, breaking
-orchestrator.py             Hand + Tournament -- wires all of the above
-                             behind two classes, plus Rabbit Runner
-analytics.py                hands/hour, pot-vs-blinds, showdown frequency,
-                             hand-strength distribution, player feedback
-demo_showcase.py            two scripted, deterministic showcase hands for
-                             the public demo landing page (GET /demo/script)
-api.py                      REST + WebSocket layer over the orchestrator
-example_usage.py            runnable script showing the orchestrator API
-test_*.py                   244 tests, pytest
-requirements.txt            fastapi / uvicorn / pydantic / pytest / httpx
-Dockerfile, .dockerignore   container image (Fly.io / Railway / Render-Docker)
-render.yaml                 Render Blueprint (native Python runtime)
-fly.toml                    Fly.io app config
-Procfile                    Railway start command
-DEPLOYMENT.md                step-by-step deploy instructions for all three
+tournament_structure.py     blind schedule/clock, payouts
+tournament_balancing.py     multi-table seating, elimination, table breaks
+orchestrator.py             Hand + Tournament, Rabbit Runner, per-hand runout log
+analytics.py                hands/hour, pot vs blinds, showdown frequency, hand-strength distribution
+demo_showcase.py            two scripted, deterministic showcase hands (GET /demo/script)
+api.py                      REST + WebSocket layer
+example_usage.py            runnable orchestrator example
+test_*.py                   244 tests (pytest)
+static/index.html           the demo table client (vanilla JS), served at /app/
+static/strategy.html        the Strategy Guide, served at /app/strategy.html
+sim/                        C equity simulator, evaluator validation, run_checks.sh, replication notes
+.github/workflows/          equity-sim.yml, tests.yml, unpack-zip.yml
+docs/                       audit records
+Dockerfile, render.yaml, fly.toml, Procfile, DEPLOYMENT.md   deployment (Render auto-deploys on push to main)
 ```
 
-Every module above the API layer is dependency-free standard-library
-Python. All 244 tests pass (222 + 22 added in the session that shipped
-the hand-runout log and showdown hand descriptions; this session's work
-was frontend-only and added no new Python tests -- see `HANDOFF.md` for
-the full rundown, and for what shipped in earlier
-sessions: live bet/pot visibility, the hand-history log, the demo
-landing page, the analytics/instrumentation layer, the real-time
-blind-clock fix, and so on).
+Everything above the API layer is dependency-free standard-library Python.
 
 ## Running it
 
 ```bash
 pip install -r requirements.txt
-pytest -q                        # 244 passed
+bash sim/run_checks.sh py        # pytest: 244 passed
+bash sim/run_checks.sh sim       # simulator + evaluator validation + strategy-page match, about 2 minutes
 python3 example_usage.py         # orchestrator demo, no network
-uvicorn api:app --reload         # real server on http://127.0.0.1:8000
+uvicorn api:app --reload         # server on http://127.0.0.1:8000 (Swagger UI at /docs)
 ```
 
-With the server running, interactive API docs are at
-`http://127.0.0.1:8000/docs` (FastAPI's built-in Swagger UI) --
-useful for poking at endpoints by hand before wiring up a frontend.
+## Updating the repo with a zip
 
-To put this on a real, shareable URL instead of just running it locally,
-see `DEPLOYMENT.md`. Render auto-deploys on every push to `main` --
-confirmed directly by the person running this project, so Phase 0's
-open question in `POLISH_PLAN.md` about that is resolved.
+Upload one `.zip` to the repository root (GitHub: Add file, Upload files). The "Unpack uploaded zip" workflow
+unpacks it into the right folders, runs the validation that fits what changed, and only then commits to `main`
+and deletes the zip; on any problem nothing is committed and the zip stays. Accepted: root `*.py`,
+`requirements.txt`, `.gitignore`, root `*.md`, `docs/*.md`, `sim/*`, `static/*.{html,css,js,svg}`. Legal and
+deployment files are never accepted; workflow files are skipped unless a `WORKFLOW_PAT` secret exists.
+Details: `ORIENTATION.md`.
 
 ## Quick manual walkthrough
 
 ```bash
-# two guests
-curl -s -X POST localhost:8000/guest -d '{"display_name":"Alice"}' -H 'Content-Type: application/json'
-curl -s -X POST localhost:8000/guest -d '{"display_name":"Bob"}'   -H 'Content-Type: application/json'
-
-# a table, both join, start it
+curl -s -X POST localhost:8000/guest  -d '{"display_name":"Alice"}' -H 'Content-Type: application/json'
+curl -s -X POST localhost:8000/guest  -d '{"display_name":"Bob"}'   -H 'Content-Type: application/json'
 curl -s -X POST localhost:8000/tables -d '{"max_seats":6,"starting_stack":40}' -H 'Content-Type: application/json'
 curl -s -X POST localhost:8000/tables/<table_id>/join -d '{"player_id":"<alice_id>"}' -H 'Content-Type: application/json'
 curl -s -X POST localhost:8000/tables/<table_id>/join -d '{"player_id":"<bob_id>"}'   -H 'Content-Type: application/json'
 curl -s -X POST localhost:8000/tables/<table_id>/start
-
-# poll state (as Alice, so her own hole cards are visible to her)
 curl -s "localhost:8000/tables/<table_id>/state?player_id=<alice_id>"
-
-# take an action
 curl -s -X POST localhost:8000/tables/<table_id>/actions \
   -d '{"player_id":"<alice_id>","action_type":"CALL"}' -H 'Content-Type: application/json'
 ```
 
-Or connect a WebSocket to `ws://localhost:8000/ws/tables/<table_id>?player_id=<id>`
-for live push updates instead of polling `/state`.
+Or connect a WebSocket to `ws://localhost:8000/ws/tables/<table_id>?player_id=<id>` for live pushes.
 
-## Watch the demo
+## Features worth knowing about
 
-`GET /demo/script` returns two fully scripted, deterministic hands --
-"The Extra Card" (the 3rd hole card completing a straight that isn't
-reachable with only 2) and "Rabbit Runner" (a turn fold, then a paid
-peek at the river that would have come) -- and `static/index.html`
-animates them on a "Watch the demo" button on the landing page, no
-guest/table/join required. As of this session, the demo panel also keeps
-a collapsible "Hands played so far" log of every showcase hand watched in
-the current run-through (title, final board, payout, and the full
-play-by-play), so the first hand's narration no longer disappears the
-moment the second one starts playing.
+**Watch the demo.** `GET /demo/script` returns two scripted, deterministic hands played through the real engine
+with a rigged deck: "The Extra Card" (the 3rd hole card completes a straight not reachable with two) and "Rabbit
+Runner" (a turn fold, then a paid peek at the river). The landing page animates them and keeps a collapsible
+"Hands played so far" log. They are scripted because Rabbit Runner only appears after a turn or river fold, which
+the reference bot essentially never does.
 
-This exists because both features are easy to miss by just clicking
-around: the 3rd hole card only visibly matters when it changes a hand's
-category, and Rabbit Runner only ever shows up after a turn/river fold,
-which the reference bot policy (`orchestrator.default_bot_action`)
-essentially never does on its own (see `demo_showcase.py`'s module
-docstring, and `HANDOFF.md`). The script is played through the real
-engine (`orchestrator.Hand`, given a rigged deck the same way
-`test_orchestrator.py` rigs one for its own deterministic tests), so
-it's provably real gameplay, not a mocked-up animation -- it just
-guarantees you'll see the two features every time instead of maybe.
+**Hand history.** `GET /tables/<id>/hands` returns every hand at a table (most recent first, up to 500 retained),
+with board, payouts, revealed hands, folds, and any Rabbit Runner outcome. Unlike `last_hand` on `/state`, which
+describes only the latest hand, and `/analytics`, which is aggregate only, this is the per-hand log. `last_hand`
+carries a `hand_number` matching it, because its banner (and any rabbit-hunt offer) stays visible for the whole
+next hand.
 
-## Hand history
+**Runout and showdown descriptions.** `last_hand` and each history entry carry `runout` (a step per flop, 3rd hole
+card, turn and river, with the board at that point and, once no more betting is possible, every remaining
+player's hole cards) and `hand_descriptions` (`"Two Pair, Jacks and Fours"`, keyed like `revealed_hands`; the
+winner is read from `payouts`). Both are empty for a hand that ends by fold. `static/index.html` replays them on
+the felt with a Skip button. That replay is verified structurally (jsdom) but **not yet in a real browser**.
 
-`GET /tables/<table_id>/hands` returns every hand played at a table (most
-recent first, capped at `MAX_HAND_HISTORY` = 500 retained per table),
-each with its board, payouts, any revealed hands, folded players, and
-any Rabbit Runner outcome. This is deliberately different from `/state`'s
-`last_hand` field, which only ever describes the single most-recently-
-finished hand and gets overwritten the moment the next one completes --
-that's the "the first hand's info goes away as soon as the 2nd hand
-starts" gap this closes. It's also different from `/analytics`, which is
-aggregate-only (hands/hour, category distribution, no player identities
-or actual cards) -- this is the human-readable, per-hand log for
-actually looking back at what happened, and `static/index.html` renders
-it as a collapsible "Hand history" panel, each hand further expandable
-for the detail, fetched lazily only while the panel is open.
+**Live bet visibility.** The live `hand` payload carries `current_bet`, `pot_total` and each player's
+`bet_this_street`, public to every viewer.
 
-`last_hand` (both on `/state` and pushed over the WebSocket) now also
-carries a `hand_number`, cross-referencing the same numbering shown in
-this log -- see `HANDOFF.md` for why that matters: the "last hand"
-banner and any Rabbit Runner offer riding along with it stay visible for
-the *entire* next hand's duration by design, so labeling exactly which
-hand they refer to (rather than just "Last hand:") matters once that
-next hand's own board has also filled up to 5 cards.
+**Analytics.** `GET /tables/<id>/analytics` returns hands/hour, average pot in big blinds, showdown frequency, the
+showdown category distribution and a same-evaluator standard-Hold'em baseline; `POST /tables/<id>/feedback`
+records thumbs up/down. No screen displays these yet.
 
-## Hand runout & showdown descriptions
-
-`last_hand` and every `/tables/<table_id>/hands` entry now also carry
-`runout` and `hand_descriptions`.
-
-`runout` is a step-by-step record of the flop, 3rd hole card, turn
-reveal, and river reveal -- each step has the community cards as of
-that point, and, from the moment no further betting decision was
-possible (every remaining player all-in), every remaining player's hole
-cards. It exists specifically for hands that fast-forward through
-several streets inside a single request -- the common case: an early
-all-in -- where the response would otherwise land with a full board and
-no way to reconstruct what happened street by street. A normally-paced
-hand produces the identical shape, just built up one live state push at
-a time instead of all at once, so a client never needs two different
-code paths for "there's something to replay" vs. "nothing changed, I
-already saw all of this live." Empty for a hand that ends by fold before
-reaching any of those streets. This is the backend half of
-`POLISH_PLAN.md`'s Phase 0.5; `static/index.html` now animates it on the
-felt (see "Hand reveal sequence" below) -- built and verified this
-session by structural (jsdom) tests, but not yet confirmed in a real
-browser; see `HANDOFF.md`.
-
-`hand_descriptions` is a player-facing description of each revealed hand
-at showdown (`"Two Pair, Jacks and Fours"`, `"Full House, Aces full of
-Kings"`, ...), keyed the same way as `revealed_hands`. Whether a
-particular revealed hand won isn't duplicated here as its own flag --
-cross-reference `payouts`, which every caller of this already has right
-alongside it. Both fields are empty for a hand that ends by fold, where
-there's nothing to reveal or describe.
-
-## Hand reveal sequence
-
-`static/index.html` plays back a just-finished hand's `runout` and
-`hand_descriptions` (above) on the felt itself, in two situations that
-can each happen independently: a fast-forwarded hand (typically an early
-all-in) replays whichever board/hole-card steps this particular client's
-connection fast-forwarded past -- hole cards for any all-in player(s),
-then flop, then 3rd hole card, then turn, then river, each with a short
-pause -- and *any* hand that reaches a real showdown, fast-forwarded or
-not, gets a closing beat that shows each revealed hand's description
-next to its cards with the winner visually marked. A hand that ends by
-fold gets neither; the existing last-hand banner already covers that
-case on its own. A "Skip" control is available during the reveal. This
-is `POLISH_PLAN.md`'s Phase 0.5c, verified this session via a structural
-(jsdom) test pass built from real captured API output -- **not yet
-confirmed in an actual browser**; see `HANDOFF.md` for exactly what that
-still needs to check before this counts as done.
-
-## Analytics / instrumentation
-
-`GET /tables/<table_id>/analytics` returns hands/hour, average pot size
-in big blinds, showdown frequency, the hand-category distribution among
-revealed showdown hands, and a same-evaluator empirical baseline for
-*standard* Hold'em to compare against -- this is the data the tech
-plan's Section 3.3 hypothesis-testing actually depends on (see
-`analytics.py` and `HANDOFF.md`). `POST /tables/<table_id>/feedback`
-with `{"player_id": "...", "thumbs_up": true}` records the lightweight
-player-reported-excitement signal from the same section.
-
-## Live bet visibility
-
-The live `hand` payload (`GET /state` and the WebSocket push) includes
-`current_bet` (what everyone on the current street needs to match),
-`pot_total` (everything committed to the pot so far this hand, across
-every street), and each player's own `bet_this_street` -- all public
-information at a real table, visible to every viewer, not just the
-player currently acting. Before this session, a player facing a bet or
-raise only ever saw CALL/RAISE/FOLD buttons with no indication of the
-actual size of any of them unless they'd watched the whole street play
-out live themselves; see `HANDOFF.md` for the fix.
+**Strategy Guide and equity simulation.** Every number on the guide comes from `sim/holdem_plus_equity.c`: all-in
+equity for all 169 starting hands, Hold'em against Hold'em Plus on the same deals, heads-up (300,000 deals each)
+and six-handed (150,000), with standard errors. This is raw strength against random hands that never fold, not
+profit; the tiers and opening ranges are labelled provisional. The evaluator is validated in layers (exact 5- and
+7-card counts, all 7,462 distinct five-card hands, 24 hand-derived edge cases, a 40,000-showdown cross-check
+against `hand_evaluator.py`), and `sim/check_published.py` fails if the page's embedded data ever drifts from a
+fresh simulation. Replication steps and limits: `sim/README.md`; audit record: `docs/AUDIT_2026-11.md`.
 
 ## Known scope limits
 
-This is a single-process, in-memory, single-table-per-game demo backend.
-No database, no auth beyond an opaque guest id, no frontend. It's built
-to be the backend a forked PokerTH web client (or any other client) talks
-to next.
+Single-process and in-memory: no database, no persistence across restarts, no auth beyond an opaque guest id, one
+table per game in the public API (the engine supports multi-table internally), no rate limiting. The bundled
+client is a vanilla-JS placeholder; forking a mature poker client is the recommended path for a polished v1
+(`POLISH_PLAN.md`, Phase 4+).
