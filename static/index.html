@@ -184,6 +184,11 @@
 
   .hint { font-size: 0.8rem; color: var(--muted); margin-top: 0.5rem; }
   a { color: var(--accent); }
+  /* Site navigation: the demo and the Strategy Guide link to each other. The guide opens in a new tab on
+     purpose -- navigating away mid-hand would drop the WebSocket and lose your seat (player id is held only
+     in page memory). */
+  .topnav { margin: 0.9rem 0 0; font-size: 0.9rem; color: var(--muted); }
+  .topnav a { font-weight: 600; }
 
   #last-hand-banner {
     display: none;
@@ -349,6 +354,10 @@
   <h1>Hold'em Plus</h1>
   <p>A play-money demo of Hold'em Plus: standard Texas Hold'em with a third hole card dealt after
      the flop. No real money, no accounts required — pick a name and sit down.</p>
+  <nav class="topnav" aria-label="Related pages">
+    <a href="strategy.html" target="_blank" rel="noopener">Strategy Guide ↗</a>
+    — how the third card changes which hands are worth playing (opens in a new tab)
+  </nav>
 </header>
 
 <main>

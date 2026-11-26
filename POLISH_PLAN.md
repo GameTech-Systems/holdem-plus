@@ -17,8 +17,8 @@ is summarized; the long write-ups are in git history (`git show dab98db^:POLISH_
 
 ## Phase 0: get the pending work live, then clear the browser bar
 
-- [ ] Apply the 2026-11-25 update (steps in `HANDOFF.md` section 1): workflow files by hand, then the zip.
-- [ ] Run the "Equity simulation" workflow once on GitHub and confirm it is green.
+- [x] ~~Apply the 2026-11-25 update~~ (applied by the unpack workflow, commit `dba8e71`).
+- [ ] Confirm the "Tests" and "Equity simulation" workflows are green on GitHub (run the latter once by hand).
 - [ ] Load the deployed URL in a real browser and click through, at minimum:
   - seat two tabs at a table, play a hand to completion, open "Hand history", use Rabbit Runner once and confirm it
     shows in the last-hand banner and the history log; watch the scripted demo end to end, including "Hands
@@ -33,7 +33,10 @@ is summarized; the long write-ups are in git history (`git show dab98db^:POLISH_
     could crowd a seat;
   - **Strategy Guide** (`/app/strategy.html`): phone and desktop, every chart view, the heads-up and 6-handed
     switch, the "Show the chart data as a table" disclosure, and the longer odds cells on the 3-card tab at phone
-    width.
+    width;
+  - **The two new cross-links:** the "Strategy Guide" link under the demo's heading (opens a new tab; check it does
+    not wrap badly on a narrow phone) and, on the guide, the "Play Hold'em Plus" link at the top and the closing
+    line.
 - [ ] Docs-only decisions: the `TRADEMARKS.md` entity-name mismatch ("GamingTech, LLC" vs "GameTech Systems"), and
   posting `welcome_message.md` to GitHub Discussions (drafted across many sessions, never posted).
 
@@ -82,8 +85,9 @@ working in a browser.
 
 From the outside audit (`docs/AUDIT_2026-11.md`, "Still open"). Ordered by value for effort:
 
-- [ ] **Link the pages to each other.** `/app/` does not link to `/app/strategy.html` and vice versa. Small edit to
-  both; needs the browser check.
+- [x] **Link the pages to each other** (2026-11-26): header link on `/app/` (new tab, so a hand in progress is not
+  lost), top link and closing line on the guide. Link resolution tested against the served app; the visual check
+  is in Phase 0.
 - [ ] **Conditional third-card calculator**: pick your two cards and the flop, get the exact chance the plus card is
   each kind of out (`sim/third_card_odds.py` already enumerates this; the page needs a small client-side version).
 - [ ] A worked example of one hand before and after the plus card, a short glossary, and one consistent term for the

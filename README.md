@@ -4,8 +4,10 @@ A play-money Hold'em Plus engine, API, demo table and equity simulation, built t
 online poker rooms and casinos. Hold'em Plus is Texas Hold'em with a third hole card dealt after the flop;
 showdown is the best 5 of 8 cards.
 
-- Live demo: https://holdem-plus-demo.onrender.com/app/
-- Strategy Guide: https://holdem-plus-demo.onrender.com/app/strategy.html
+- **Live demo:** https://holdem-plus-demo.onrender.com/app/
+- **Strategy Guide:** https://holdem-plus-demo.onrender.com/app/strategy.html (source:
+  [`static/strategy.html`](static/strategy.html); every number comes from the [equity simulation](sim/README.md)).
+  The demo and the guide link to each other.
 - New to the repo or picking up where a session left off: read `ORIENTATION.md`, then `HANDOFF.md`
   (current state) and `POLISH_PLAN.md` (backlog). The product plan is
   `Hold_em_Plus___Technology_Development_Plan.md`.
@@ -25,8 +27,8 @@ demo_showcase.py            two scripted, deterministic showcase hands (GET /dem
 api.py                      REST + WebSocket layer
 example_usage.py            runnable orchestrator example
 test_*.py                   244 tests (pytest)
-static/index.html           the demo table client (vanilla JS), served at /app/
-static/strategy.html        the Strategy Guide, served at /app/strategy.html
+static/index.html           the demo table client (vanilla JS), served at /app/; links to the Strategy Guide
+static/strategy.html        the Strategy Guide, served at /app/strategy.html; links back to the demo
 sim/                        C equity simulator, evaluator validation, run_checks.sh, replication notes
 .github/workflows/          equity-sim.yml, tests.yml, unpack-zip.yml
 docs/                       audit records
@@ -97,13 +99,29 @@ the felt with a Skip button. That replay is verified structurally (jsdom) but **
 showdown category distribution and a same-evaluator standard-Hold'em baseline; `POST /tables/<id>/feedback`
 records thumbs up/down. No screen displays these yet.
 
-**Strategy Guide and equity simulation.** Every number on the guide comes from `sim/holdem_plus_equity.c`: all-in
-equity for all 169 starting hands, Hold'em against Hold'em Plus on the same deals, heads-up (300,000 deals each)
-and six-handed (150,000), with standard errors. This is raw strength against random hands that never fold, not
-profit; the tiers and opening ranges are labelled provisional. The evaluator is validated in layers (exact 5- and
-7-card counts, all 7,462 distinct five-card hands, 24 hand-derived edge cases, a 40,000-showdown cross-check
-against `hand_evaluator.py`), and `sim/check_published.py` fails if the page's embedded data ever drifts from a
-fresh simulation. Replication steps and limits: `sim/README.md`; audit record: `docs/AUDIT_2026-11.md`.
+## Strategy Guide
+
+Live at https://holdem-plus-demo.onrender.com/app/strategy.html, linked from the header of the demo table (it
+opens in a new tab so a hand in progress is not lost) and linking back to it. It teaches how the third hole card
+changes the game:
+
+- **Starting-hand chart** for all 169 hands in seven views (strategy tiers, Hold'em equity, Hold'em Plus equity,
+  the difference, and the three third-card outcomes), heads-up or six-handed, with hover detail and a collapsible
+  data table for screen readers.
+- **After-the-plus-card tab:** exact odds that the third card pairs you, makes trips or suits you (averaged over
+  flops, and conditional on what the flop already used), equity of 14 common three-card shapes, and hand tiers.
+- **Core principles, opening ranges by seat, ring-game versus tournament advice.**
+
+**Where the numbers come from.** Every number on the guide comes from
+[`sim/holdem_plus_equity.c`](sim/holdem_plus_equity.c): all-in equity for all 169 starting hands, Hold'em against
+Hold'em Plus on the same deals, heads-up (300,000 deals each) and six-handed (150,000), with standard errors. This is
+raw strength against random hands that never fold, **not profit**; the tiers and opening ranges are labelled
+provisional rule-of-thumb guidance. The evaluator is validated in layers (exact 5- and 7-card counts, all 7,462
+distinct five-card hands, 24 hand-derived edge cases, a 40,000-showdown cross-check against `hand_evaluator.py`), and
+`sim/check_published.py` fails if the page's embedded data ever drifts from a fresh simulation.
+
+Replication steps and limits: [`sim/README.md`](sim/README.md). Audit record: [`docs/AUDIT_2026-11.md`](docs/AUDIT_2026-11.md).
+To re-run everything: `bash sim/run_checks.sh sim`.
 
 ## Known scope limits
 

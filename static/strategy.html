@@ -42,6 +42,10 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .legend i{display:inline-block;width:.8rem;height:.8rem;border-radius:2px;margin-right:.35rem;vertical-align:-1px}
 .note{color:var(--mut);font-size:.85rem}
 footer{color:var(--mut);font-size:.8rem;margin-top:1.4rem;max-width:70ch}
+.topnav,.cta{font-size:.9rem}
+.topnav{margin:0 0 1rem}
+.topnav a,.cta a{color:var(--accent);font-weight:600}
+.cta{margin:0 0 1rem}
 .ctl{display:flex;gap:.6rem;flex-wrap:wrap;margin-bottom:.8rem}
 select{font:inherit;font-size:.88rem;padding:.4rem .6rem;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--text)}
 select:disabled{opacity:.45}
@@ -54,6 +58,7 @@ select:disabled{opacity:.45}
 </head>
 <body>
 <div class="wrap">
+<nav class="topnav" aria-label="Related pages"><a href="index.html">← Play Hold’em Plus</a></nav>
 <h1>Hold’em Plus Poker Strategy Guide</h1>
 <p class="lede">Texas Hold’em with one extra hole card, dealt after the flop. Everything else still applies, but best-5-of-8 changes which hands are worth playing and how strong a “good” hand really is.</p>
 
@@ -181,6 +186,8 @@ select:disabled{opacity:.45}
 </div>
 </div>
 </section>
+
+<p class="cta">Ready to try it? <a href="index.html">Sit down at a play-money table</a>, or watch the two scripted showcase hands (the extra card, and Rabbit Runner) from the “Watch the demo” button on that page.</p>
 
 <footer>Every number here is reproducible: <a href="https://github.com/GameTech-Systems/holdem-plus/tree/main/sim" style="color:var(--accent)">simulation code, workflow and replication notes on GitHub</a>. Equities are Monte Carlo results against random opponents who never fold, with ties split: 300,000 deals per starting hand heads-up and 150,000 against five hands. The standard error of any one estimate is at most 0.09 points heads-up and 0.13 six-handed (hover a cell for its own), and a 95% margin is about twice that. Hold’em and Plus are scored on the same deals, which cuts the noise in their difference by roughly 30% but does not remove it; hover a cell for the difference and its standard error. Equity against random hands is raw strength, not expected profit against real opponents who fold, so use it to rank hands, not to size bets. All-in EV per chip staked is players × equity − 1, which assumes equal stacks all in, no rake and nobody folding. Tiers and ranges are rule-of-thumb guidance informed by these numbers, not solver output. The odds on the three-card tab are exact, from a full enumeration of flops and plus cards (<code>sim/third_card_odds.py</code>).</footer>
 </div>

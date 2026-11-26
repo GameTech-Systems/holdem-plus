@@ -4,12 +4,36 @@ Current state only. Stable orientation is in `ORIENTATION.md`; the backlog is in
 record is in `docs/AUDIT_2026-11.md`. Older session write-ups (the Phase 0.5c reveal-sequence notes, the first
 audit pass) are in git history: `git show 555ad94:HANDOFF.md`.
 
-If `sim/run_checks.sh` does not exist in the repo you are looking at, the 2026-11-25 update zip has not been
-applied yet; see section 1.
+---
+
+## 0. Latest session (2026-11-26): confirm the update landed, cross-link the pages
+
+**The update zip worked, on real GitHub.** Fresh clone of `main`: `unpack-zip.yml` and `tests.yml` are the delivered
+versions byte for byte, the stray root `unpack-zip.yml` is gone, and commit `dba8e71` by `github-actions[bot]`
+("Unpack holdem-plus-update-2026-11-25.zip") installed all 7 files, each identical to what was built, and deleted
+the zip. So the zip mechanism has now succeeded once end to end outside the local rehearsal. (A person also renamed
+the guide's heading to "Hold'em Plus Poker Strategy Guide" in `8d72c2c`; the data block is untouched.)
+
+**Added this session.**
+- `static/index.html`: a header link "Strategy Guide" that opens in a **new tab** on purpose. Navigating away
+  mid-hand would drop the WebSocket and lose the seat (the player id lives only in page memory).
+- `static/strategy.html`: a "Play Hold'em Plus" link above the heading and a call to action after the last section.
+- `README.md`: the Strategy Guide now has its own section (what is in it, where the numbers come from, links to the
+  source, `sim/README.md` and the audit record), plus links near the top and in the file map.
+- Links are relative (`strategy.html`, `index.html`), so they work at `/app/`, behind Render's proxy, and from disk.
+
+**Verified.** The real app was served in-process; both pages were parsed, every internal link was resolved the way a
+browser resolves it from `/app/`, and each returned 200 (also `/app` redirecting to `/app/`). `strategy.html`'s
+embedded data block still matches `check_published.py`'s extraction. Full `bash sim/run_checks.sh all` and 244 tests
+pass on the edited tree.
+
+**Not verified.** How the new links *look*: no real browser or modern renderer was available, so spacing, wrapping
+at phone width and dark/light contrast are unseen. Whether the "Equity simulation" and "Tests" workflows are green
+on GitHub is also unknown from here (the connector can read files but not Actions runs).
 
 ---
 
-## 0. Latest session (2026-11-25, second pass): verify the hand upload, make zip updates work
+## 0b. Previous pass (2026-11-25): verify the hand upload, make zip updates work
 
 **Starting point.** The previous session's audit work had been uploaded by hand because its zip/workflow attempt
 failed. Checked from a fresh clone of `main` at `00a32c9`.
@@ -25,7 +49,7 @@ failed. Checked from a fresh clone of `main` at `00a32c9`.
   assertions, then a full default-seed run (41 s) that reproduces `strategy.html`'s embedded data exactly.
 - The Strategy Guide's prose numbers match the data (list in `docs/AUDIT_2026-11.md`).
 
-**Found and fixed (in the update bundle; see section 1 for status).**
+**Found and fixed (all now applied to `main`).**
 1. **`sim/run_checks.sh` never existed.** `unpack-zip.yml` calls it, so any zip touching `sim/` or `static/` would
    have failed at validation, and the previous session's "every step passed locally" did not cover this. Created.
 2. **The unpack allowlist was far too narrow**: only `sim/*`, `static/strategy.html` and three root docs, so a zip
@@ -50,31 +74,25 @@ files, oversized, too many files, duplicates across zips, a zip with a failing t
 strategy-page number. The last two were run with the real validation and correctly committed nothing and left the
 zip in place. `actionlint` is clean on all three workflows.
 
-**Not verified, honestly.**
-- **GitHub Actions has never run these workflows.** The rehearsal reproduces the logic, not GitHub's runner,
-  permissions or settings. The first real zip upload is the test. Check Settings, Actions, General: workflow
-  permissions should allow read and write (the workflow requests `contents: write` itself, but an organization
-  policy can cap it).
-- The connector used this session was **read-only**, so nothing was pushed. Everything is in the update bundle.
-- The live Render site was not reachable from this session; whether it serves the new `strategy.html` is unchecked.
-- Nothing has been looked at in a real browser, including the Strategy Guide at phone width and the Phase 0.5c
-  reveal sequence from the previous sessions.
+**Not verified at the time** (status now): the unpack workflow had never run on GitHub (**it has now, and worked**);
+`tests.yml` and `equity-sim.yml` runs are still unconfirmed; the connector used by Claude sessions is **read-only**,
+so a session cannot push and ships a zip instead; the live Render site was not reachable from a session; nothing has
+been looked at in a real browser, including the Strategy Guide at phone width and the Phase 0.5c reveal sequence.
 
 ---
 
 ## 1. Do these next, in order
 
-1. **By hand** (workflow files cannot be installed by the workflow itself without a token secret): upload
-   `unpack-zip.yml` and `tests.yml` into `.github/workflows/` (the first replaces the installed one), and delete
-   the stray root `unpack-zip.yml`.
-2. Upload the update zip at the repo root. In Actions, "Unpack uploaded zip" should go green in about 3 minutes and
-   commit `Unpack ...`. This is the first real test of the mechanism. If it fails, nothing was committed: read
-   the summary, delete the zip, fix, retry.
-3. Actions, "Equity simulation", Run workflow: should be green and attach `results.json`.
+1. On GitHub, Actions: confirm **Tests** and **Equity simulation** are green (run "Equity simulation" once from
+   "Run workflow" if it has not run since the update; it also attaches `results.json`).
+2. Upload this session's zip (`static/index.html`, `static/strategy.html`, `README.md`, `HANDOFF.md`,
+   `POLISH_PLAN.md`). "Unpack uploaded zip" should go green in about 3 minutes; it runs the full simulation checks
+   because the strategy page changed.
+3. Look at both pages in a real browser, phone and desktop: the new header link on `/app/` (does it wrap badly on a
+   narrow screen? does it open a new tab?) and the top link and closing line on `/app/strategy.html`. Then the
+   Phase 0 click-through in `POLISH_PLAN.md`, which still blocks calling Phase 0.5 done.
 4. Optional: add a `WORKFLOW_PAT` secret so future zips may also carry workflow files.
-5. Open `/app/strategy.html` on a phone and a desktop; expand "Show the chart data as a table". Then the Phase 0
-   click-through in `POLISH_PLAN.md`, which still blocks calling Phase 0.5 done.
-6. Open decisions: the `TRADEMARKS.md` entity-name mismatch ("GamingTech, LLC" vs "GameTech Systems"), and posting
+5. Open decisions: the `TRADEMARKS.md` entity-name mismatch ("GamingTech, LLC" vs "GameTech Systems"), and posting
    `welcome_message.md` to GitHub Discussions.
 
 ---
